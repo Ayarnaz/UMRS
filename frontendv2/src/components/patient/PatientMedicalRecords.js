@@ -59,20 +59,22 @@ function PatientMedicalRecords() {
     }
   };
 
-  const handleViewDocument = (doc) => {
-    // Implement document viewing logic
-    window.open(doc.url, '_blank');
+  const handleViewDocument = (filePath) => {
+    const baseUrl = 'http://localhost:8080';
+    window.open(`${baseUrl}/${filePath}`, '_blank');
   };
 
-  const handleDeleteDocument = async (docId) => {
-    if (window.confirm('Are you sure you want to delete this document?')) {
-      try {
-        await api.delete(`/api/patient/medical-documents/${docId}`);
-        fetchDocuments();
-      } catch (err) {
-        console.error('Error deleting document:', err);
-        alert('Failed to delete document');
-      }
+  const handleDeleteDocument = async (documentId) => {
+    if (!window.confirm('Are you sure you want to delete this document?')) {
+      return;
+    }
+
+    try {
+      await api.delete(`/api/patient/medical-documents/${documentId}`);
+      fetchDocuments(); // Refresh the documents list
+    } catch (error) {
+      console.error('Error deleting document:', error);
+      setError('Failed to delete document');
     }
   };
 
@@ -127,15 +129,28 @@ function PatientMedicalRecords() {
 }, [user?.userIdentifier]);
 
   const fetchDocuments = useCallback(async () => {
-    if (!user?.id) return;
-    
-    try {
-      const response = await api.get(`/api/patient/medical-documents?personalHealthNo=${user.id}`);
-      setDocuments(response.data || []);
-    } catch (err) {
-      console.error('Error fetching documents:', err);
+    if (!user?.userIdentifier) {
+      console.log('No user identifier available, skipping document fetch');
+      return;
     }
-  }, [user?.id]);
+
+    try {
+      console.log('Fetching documents for PHN:', user.userIdentifier);
+      const response = await api.get(`/api/patient/medical-documents/by-phn/${user.userIdentifier}`);
+      
+      console.log('Documents response:', response);
+      if (response.data) {
+        setDocuments(response.data);
+      } else {
+        setDocuments([]);
+      }
+    } catch (error) {
+      console.error('Error fetching documents:', error);
+      console.error('Error response:', error.response);
+      setError('Failed to load medical documents');
+      setDocuments([]);
+    }
+  }, [user?.userIdentifier]);
 
   useEffect(() => {
     fetchData();
@@ -160,7 +175,7 @@ function PatientMedicalRecords() {
     }
   }, [user?.personalHealthNo]);
 
-  const handleUploadClick = (recordId) => {
+  const handleUploadClick = (recordId = null) => {
     setSelectedRecordId(recordId);
     setIsUploadModalOpen(true);
   };
@@ -360,50 +375,81 @@ function PatientMedicalRecords() {
               <div className="bg-white rounded-lg shadow overflow-hidden">
                 <div className="p-4 flex justify-between items-center">
                   <h2 className="text-lg font-semibold">Medical Documents</h2>
-                  <button
-                    onClick={() => handleUploadClick(selectedRecord?.recordId)}
-                    className="bg-blue-500 text-white px-4 py-2 rounded flex items-center"
-                  >
-                    <Upload className="w-4 h-4 mr-2" />
-                    Upload Document
-                  </button>
+                  <div className="flex space-x-2">
+                    <button
+                      onClick={() => handleUploadClick()}
+                      className="bg-blue-500 text-white px-4 py-2 rounded flex items-center"
+                    >
+                      <Upload className="w-4 h-4 mr-2" />
+                      Upload Document
+                    </button>
+                    <button
+                      onClick={fetchDocuments}
+                      className="bg-gray-200 px-4 py-2 rounded flex items-center"
+                    >
+                      <RefreshCw className="w-4 h-4 mr-2" />
+                      Refresh
+                    </button>
+                  </div>
                 </div>
+
+                {error && (
+                  <div className="p-4 text-red-500 text-sm">
+                    {error}
+                  </div>
+                )}
 
                 <table className="w-full">
                   <thead className="bg-gray-50">
                     <tr>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Record ID</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Upload Date</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200">
-                    {documents.map((doc) => (
-                      <tr key={doc.documentID}>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{doc.details}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{doc.documentType}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                          {new Date(doc.uploadDate).toLocaleDateString()}
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                          <div className="flex space-x-2">
-                            <button
-                              onClick={() => window.open(doc.filePath)}
-                              className="text-blue-600 hover:text-blue-900"
-                            >
-                              View
-                            </button>
-                            <button
-                              onClick={() => handleDeleteDocument(doc.documentID)}
-                              className="text-red-600 hover:text-red-900"
-                            >
-                              Delete
-                            </button>
-                          </div>
+                    {documents.length === 0 ? (
+                      <tr>
+                        <td colSpan="5" className="px-6 py-4 text-center text-gray-500">
+                          No documents found
                         </td>
                       </tr>
-                    ))}
+                    ) : (
+                      documents.map((doc) => (
+                        <tr key={doc.documentId || doc.documentID}>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            {doc.details || doc.fileName || 'Untitled'}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {doc.documentType}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {doc.recordId}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {new Date(doc.uploadDate).toLocaleDateString()}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                            <div className="flex space-x-2">
+                              <button
+                                onClick={() => handleViewDocument(doc.filePath)}
+                                className="text-blue-600 hover:text-blue-900"
+                              >
+                                View
+                              </button>
+                              <button
+                                onClick={() => handleDeleteDocument(doc.documentId || doc.documentID)}
+                                className="text-red-600 hover:text-red-900"
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -435,6 +481,7 @@ function PatientMedicalRecords() {
         onClose={() => setIsUploadModalOpen(false)}
         onDocumentUploaded={fetchDocuments}
         recordId={selectedRecordId}
+        user={user}
       />
     </div>
   );

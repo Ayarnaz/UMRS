@@ -6,6 +6,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Timestamp;
+import java.sql.DatabaseMetaData;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
@@ -59,6 +60,54 @@ public class Main {
         String url = "jdbc:sqlite:db/umrs.db";
         final Connection[] connHolder = new Connection[1];
         
+        // 1. Configure static files FIRST
+        try {
+            Files.createDirectories(Paths.get(UPLOAD_DIR));
+            staticFiles.externalLocation(UPLOAD_DIR);
+        } catch (Exception e) {
+            System.err.println("Could not create upload directory! " + e.getMessage());
+        }
+
+        // 2. Set up port
+        port(8080);
+
+        // 3. Configure CORS with proper lambda syntax
+        options("/*", (request, response) -> {
+            String accessControlRequestHeaders = request.headers("Access-Control-Request-Headers");
+            if (accessControlRequestHeaders != null) {
+                response.header("Access-Control-Allow-Headers", accessControlRequestHeaders);
+            }
+
+            String accessControlRequestMethod = request.headers("Access-Control-Request-Method");
+            if (accessControlRequestMethod != null) {
+                response.header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
+            }
+
+            return "OK";
+        });
+
+        before((request, response) -> {
+            response.header("Access-Control-Allow-Origin", "*");
+            response.header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
+            response.header("Access-Control-Allow-Headers", "*");
+            response.header("Access-Control-Allow-Credentials", "true");
+            
+            if (request.requestMethod().equals("OPTIONS")) {
+                halt(200);
+            }
+
+            if (request.raw().getContentType() != null && 
+                request.raw().getContentType().startsWith("multipart/form-data")) {
+                MultipartConfigElement multipartConfigElement = new MultipartConfigElement(
+                    System.getProperty("java.io.tmpdir"),
+                    10 * 1024 * 1024,   // Max file size (10MB)
+                    20 * 1024 * 1024,   // Max request size (20MB)
+                    0                    // File size threshold
+                );
+                request.raw().setAttribute("org.eclipse.jetty.multipartConfig", multipartConfigElement);
+            }
+        });
+
         // Database connection setup
         try {
             Class.forName("org.sqlite.JDBC");
@@ -79,53 +128,6 @@ public class Main {
             return; // Exit if unable to connect to the database
         }
         
-        // Set up Spark web server
-        port(8080);
-
-        // Enable CORS
-        options("/*", (request, response) -> {
-            String accessControlRequestHeaders = request.headers("Access-Control-Request-Headers");
-            if (accessControlRequestHeaders != null) {
-                response.header("Access-Control-Allow-Headers", accessControlRequestHeaders);
-            }
-
-            String accessControlRequestMethod = request.headers("Access-Control-Request-Method");
-            if (accessControlRequestMethod != null) {
-                response.header("Access-Control-Allow-Methods", accessControlRequestMethod);
-            }
-
-            return "OK";
-        });
-
-        before((request, response) -> {
-            response.header("Access-Control-Allow-Origin", "*");
-            response.header("Access-Control-Request-Method", "GET,POST,PUT,DELETE,OPTIONS");
-            response.header("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Requested-With,Content-Length,Accept,Origin,");
-            if (request.requestMethod().equals("OPTIONS")) {
-                response.status(200);
-                return;
-            }
-
-            // Configure multipart
-            if (request.raw().getContentType() != null && 
-                request.raw().getContentType().startsWith("multipart/form-data")) {
-                MultipartConfigElement multipartConfigElement = new MultipartConfigElement(
-                    System.getProperty("java.io.tmpdir"), // Location to store temp files
-                    10 * 1024 * 1024,   // Max file size (10MB)
-                    20 * 1024 * 1024,   // Max request size (20MB)
-                    0                    // File size threshold after which files will be written to disk
-                );
-                request.raw().setAttribute("org.eclipse.jetty.multipartConfig", multipartConfigElement);
-            }
-        });
-
-        // Create uploads directory if it doesn't exist
-        try {
-            Files.createDirectories(Paths.get(UPLOAD_DIR));
-        } catch (Exception e) {
-            System.err.println("Could not create upload directory! " + e.getMessage());
-        }
-
         // Add this at the beginning of each route
         before((request, response) -> {
             System.out.println("Received request: " + request.url());
@@ -226,6 +228,7 @@ public class Main {
         });
         
         post("/login", (req, res) -> {
+            res.type("application/json");
             try {
                 JsonObject jsonBody = JsonParser.parseString(req.body()).getAsJsonObject();
                 String username = jsonBody.get("username").getAsString();
@@ -721,10 +724,12 @@ public class Main {
         });
 
         // Add these endpoints after your existing routes
-        get("/api/patient/medical-documents", (req, res) -> {
+        get("/api/patient/medical-documents/by-phn/:personalHealthNo", (req, res) -> {
             res.type("application/json");
             try {
-                String personalHealthNo = req.queryParams("personalHealthNo");
+                String personalHealthNo = req.params(":personalHealthNo");
+                System.out.println("Fetching documents for PHN: " + personalHealthNo);
+                
                 if (personalHealthNo == null || personalHealthNo.isEmpty()) {
                     res.status(400);
                     return gson.toJson(new ApiResponse("error", "Personal Health Number is required"));
@@ -742,17 +747,34 @@ public class Main {
 
         post("/api/patient/medical-documents/upload", (req, res) -> {
             res.type("application/json");
+            System.out.println("=== Document Upload Endpoint Hit ===");
             
             try {
-                req.attribute("org.eclipse.jetty.multipartConfig", new MultipartConfigElement("/tmp"));
-                
-                String recordId = req.queryParams("recordId");
-                if (recordId == null || recordId.isEmpty()) {
+                // Get the uploaded file
+                Part filePart = req.raw().getPart("file");
+                String recordId = req.raw().getParameter("recordId");
+                String documentType = req.raw().getParameter("documentType");
+                String details = req.raw().getParameter("details");
+                String personalHealthNo = req.raw().getParameter("personalHealthNo");
+
+                // Debug logging
+                System.out.println("Received upload request with:");
+                System.out.println("Record ID: " + recordId);
+                System.out.println("Document Type: " + documentType);
+                System.out.println("PHN: " + personalHealthNo);
+                System.out.println("File name: " + (filePart != null ? filePart.getSubmittedFileName() : "no file"));
+
+                // Validation
+                if (recordId == null || recordId.trim().isEmpty()) {
                     res.status(400);
                     return gson.toJson(new ApiResponse("error", "Record ID is required"));
                 }
 
-                Part filePart = req.raw().getPart("file");
+                if (personalHealthNo == null || personalHealthNo.trim().isEmpty()) {
+                    res.status(400);
+                    return gson.toJson(new ApiResponse("error", "Personal Health Number is required"));
+                }
+
                 if (filePart == null) {
                     res.status(400);
                     return gson.toJson(new ApiResponse("error", "No file uploaded"));
@@ -762,26 +784,32 @@ public class Main {
                 String fileName = System.currentTimeMillis() + "_" + filePart.getSubmittedFileName();
                 String filePath = Paths.get(UPLOAD_DIR, fileName).toString();
 
+                // Ensure upload directory exists
+                Files.createDirectories(Paths.get(UPLOAD_DIR));
+
                 // Save file
                 try (InputStream inputStream = filePart.getInputStream()) {
-                    Files.copy(inputStream, Paths.get(filePath));
+                    Files.copy(inputStream, Paths.get(filePath), StandardCopyOption.REPLACE_EXISTING);
                 }
 
                 // Create document record
                 MedicalDocument document = new MedicalDocument(
-                    Integer.parseInt(recordId),
-                    filePart.getContentType(),
+                    recordId,
+                    personalHealthNo,
+                    documentType,
+                    details,
                     filePath,
                     new java.sql.Date(System.currentTimeMillis()),
-                    "system", // Replace with actual user info when available
-                    filePart.getSubmittedFileName()
+                    "system"
                 );
 
+                // Save to database
                 MedicalDocumentDAO documentDAO = new MedicalDocumentDAO(connHolder[0]);
                 documentDAO.insertMedicalDocument(document);
 
                 return gson.toJson(new ApiResponse("success", "Document uploaded successfully"));
             } catch (Exception e) {
+                System.err.println("Error in document upload: " + e.getMessage());
                 e.printStackTrace();
                 res.status(500);
                 return gson.toJson(new ApiResponse("error", "Upload failed: " + e.getMessage()));
@@ -803,12 +831,263 @@ public class Main {
         });
 
         // Add this configuration before your routes
-        staticFiles.externalLocation("uploads");
         before((request, response) -> {
             if (request.raw().getContentType() != null && 
                 request.raw().getContentType().startsWith("multipart/form-data")) {
                 MultipartConfigElement multipartConfigElement = new MultipartConfigElement("/tmp");
                 request.raw().setAttribute("org.eclipse.jetty.multipartConfig", multipartConfigElement);
+            }
+        });
+
+        // Add these endpoints after your existing routes but before the end of main()
+        post("/api/patient/appointments", (req, res) -> {
+            res.type("application/json");
+            try {
+                JsonObject jsonRequest = JsonParser.parseString(req.body()).getAsJsonObject();
+                
+                Appointment appointment = new Appointment();
+                appointment.setPersonalHealthNo(jsonRequest.get("personalHealthNo").getAsString());
+                appointment.setSlmcNo(jsonRequest.get("slmcNo").getAsString());
+                appointment.setHealthInstituteNumber(jsonRequest.get("healthInstituteNumber").getAsString());
+                
+                // Parse date and time
+                String dateStr = jsonRequest.get("appointmentDate").getAsString();
+                String timeStr = jsonRequest.get("appointmentTime").getAsString();
+                appointment.setAppointmentDate(java.sql.Date.valueOf(dateStr));
+                appointment.setAppointmentTime(java.sql.Time.valueOf(timeStr + ":00")); // Add seconds
+                
+                appointment.setPurpose(jsonRequest.get("purpose").getAsString());
+                appointment.setStatus(jsonRequest.get("status").getAsString());
+                appointment.setNotes(jsonRequest.has("notes") ? jsonRequest.get("notes").getAsString() : "");
+                
+                AppointmentDAO appointmentDAO = new AppointmentDAO(connHolder[0]);
+                appointmentDAO.insertAppointment(appointment);
+                
+                return gson.toJson(new ApiResponse("success", "Appointment created successfully"));
+            } catch (Exception e) {
+                e.printStackTrace();
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", "Failed to create appointment: " + e.getMessage()));
+            }
+        });
+
+        put("/api/patient/appointments/:id", (req, res) -> {
+            res.type("application/json");
+            try {
+                int id = Integer.parseInt(req.params(":id"));
+                JsonObject jsonRequest = JsonParser.parseString(req.body()).getAsJsonObject();
+                
+                Appointment appointment = new Appointment();
+                appointment.setAppointmentID(id);
+                appointment.setPersonalHealthNo(jsonRequest.get("personalHealthNo").getAsString());
+                appointment.setSlmcNo(jsonRequest.get("slmcNo").getAsString());
+                appointment.setHealthInstituteNumber(jsonRequest.get("healthInstituteNumber").getAsString());
+                
+                // Parse date and time
+                String dateStr = jsonRequest.get("appointmentDate").getAsString();
+                String timeStr = jsonRequest.get("appointmentTime").getAsString();
+                appointment.setAppointmentDate(java.sql.Date.valueOf(dateStr));
+                appointment.setAppointmentTime(java.sql.Time.valueOf(timeStr + ":00")); // Add seconds
+                
+                appointment.setPurpose(jsonRequest.get("purpose").getAsString());
+                appointment.setStatus(jsonRequest.get("status").getAsString());
+                appointment.setNotes(jsonRequest.has("notes") ? jsonRequest.get("notes").getAsString() : "");
+                
+                AppointmentDAO appointmentDAO = new AppointmentDAO(connHolder[0]);
+                appointmentDAO.updateAppointment(appointment);
+                
+                return gson.toJson(new ApiResponse("success", "Appointment updated successfully"));
+            } catch (Exception e) {
+                e.printStackTrace();
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", "Failed to update appointment: " + e.getMessage()));
+            }
+        });
+
+        // Add a GET endpoint to fetch appointments
+        get("/api/patient/appointments", (req, res) -> {
+            res.type("application/json");
+            String personalHealthNo = req.queryParams("personalHealthNo");
+            System.out.println("Fetching appointments for PHN: " + personalHealthNo);
+            
+            try (Connection conn = getConnection()) {
+                AppointmentDAO appointmentDAO = new AppointmentDAO(conn);
+                Vector<Appointment> appointments = appointmentDAO.getAppointmentsByPatient(personalHealthNo);
+                
+                System.out.println("Found " + appointments.size() + " appointments");
+                
+                if (appointments.isEmpty()) {
+                    System.out.println("No appointments found for PHN: " + personalHealthNo);
+                } else {
+                    for (Appointment apt : appointments) {
+                        System.out.println("Appointment: " + apt.getAppointmentID() + 
+                                         " Date: " + apt.getAppointmentDate() +
+                                         " Time: " + apt.getAppointmentTime());
+                    }
+                }
+                
+                return gson.toJson(appointments);
+            } catch (SQLException e) {
+                e.printStackTrace();
+                return "{\"error\": \"" + e.getMessage() + "\"}";
+            }
+        });
+
+        // Add this endpoint to check appointments directly
+        get("/api/debug/appointments/:personalHealthNo", (req, res) -> {
+            res.type("application/json");
+            String personalHealthNo = req.params(":personalHealthNo");
+            
+            try (Connection conn = getConnection()) {
+                String sql = "SELECT * FROM Appointment WHERE Personal_Health_No = ?";
+                try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                    pstmt.setString(1, personalHealthNo);
+                    ResultSet rs = pstmt.executeQuery();
+                    
+                    // Debug print all fields
+                    while (rs.next()) {
+                        System.out.println("Found appointment:");
+                        System.out.println("ID: " + rs.getInt("Appointment_ID"));
+                        System.out.println("PHN: " + rs.getString("Personal_Health_No"));
+                        System.out.println("Date: " + rs.getDate("Appointment_Date"));
+                        System.out.println("Time: " + rs.getTime("Appointment_Time"));
+                        System.out.println("Status: " + rs.getString("Status"));
+                        System.out.println("-------------------");
+                    }
+                }
+                return "{\"message\": \"Debug info printed to console\"}";
+            } catch (SQLException e) {
+                e.printStackTrace();
+                return "{\"error\": \"" + e.getMessage() + "\"}";
+            }
+        });
+
+        // Add this endpoint to check appointments for a specific patient
+        get("/api/debug/check-patient-appointments/:personalHealthNo", (req, res) -> {
+            res.type("application/json");
+            String personalHealthNo = req.params(":personalHealthNo");
+            
+            try (Connection conn = getConnection()) {
+                String sql = "SELECT * FROM Appointment WHERE Personal_Health_No = ?";
+                try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                    pstmt.setString(1, personalHealthNo);
+                    ResultSet rs = pstmt.executeQuery();
+                    
+                    StringBuilder debug = new StringBuilder("Appointments for PHN " + personalHealthNo + ":\n");
+                    boolean hasAppointments = false;
+                    
+                    while (rs.next()) {
+                        hasAppointments = true;
+                        debug.append(String.format(
+                            "ID: %d, Date: %s, Time: %s, Purpose: %s, Status: %s\n",
+                            rs.getInt("Appointment_ID"),
+                            rs.getDate("Appointment_Date"),
+                            rs.getTime("Appointment_Time"),
+                            rs.getString("Purpose"),
+                            rs.getString("Status")
+                        ));
+                    }
+                    
+                    if (!hasAppointments) {
+                        debug.append("No appointments found for this patient.");
+                    }
+                    
+                    System.out.println(debug.toString());
+                    return "{\"message\": \"Check server console for debug output\"}";
+                }
+            } catch (SQLException e) {
+                e.printStackTrace();
+                return "{\"error\": \"" + e.getMessage() + "\"}";
+            }
+        });
+
+        // Check if table exists and show its structure
+        get("/api/debug/table-info", (req, res) -> {
+            res.type("application/json");
+            
+            try (Connection conn = getConnection()) {
+                // Just check for existing data
+                Statement stmt = conn.createStatement();
+                
+                // Count records
+                ResultSet count = stmt.executeQuery("SELECT COUNT(*) as count FROM Appointment");
+                count.next();
+                int totalRecords = count.getInt("count");
+                System.out.println("\nTotal appointments in database: " + totalRecords);
+                
+                // Show sample data
+                ResultSet data = stmt.executeQuery("SELECT * FROM Appointment");
+                System.out.println("\nAll appointments:");
+                while (data.next()) {
+                    System.out.println(
+                        "ID: " + data.getInt("Appointment_ID") + 
+                        ", PHN: " + data.getString("Personal_Health_No") +
+                        ", Date: " + data.getDate("Appointment_Date") +
+                        ", Time: " + data.getTime("Appointment_Time") +
+                        ", Status: " + data.getString("Status")
+                    );
+                }
+                
+                return "{\"message\": \"Found " + totalRecords + " appointments. Check server console.\"}";
+            } catch (SQLException e) {
+                e.printStackTrace();
+                return "{\"error\": \"" + e.getMessage() + "\"}";
+            }
+        });
+
+        // Check specific patient's appointments with detailed error handling
+        get("/api/debug/patient-appointments-verbose/:phn", (req, res) -> {
+            res.type("application/json");
+            String phn = req.params(":phn");
+            
+            try (Connection conn = getConnection()) {
+                System.out.println("Checking appointments for PHN: " + phn);
+                
+                String sql = "SELECT * FROM Appointment WHERE Personal_Health_No = ?";
+                try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                    pstmt.setString(1, phn);
+                    System.out.println("Executing query: " + sql + " with PHN: " + phn);
+                    
+                    ResultSet rs = pstmt.executeQuery();
+                    int count = 0;
+                    
+                    while (rs.next()) {
+                        count++;
+                        System.out.println(String.format(
+                            "Found appointment %d:\n" +
+                            "ID: %d\n" +
+                            "PHN: %s\n" +
+                            "Date: %s\n" +
+                            "Time: %s\n" +
+                            "Status: %s\n" +
+                            "Purpose: %s\n" +
+                            "-------------------",
+                            count,
+                            rs.getInt("Appointment_ID"),
+                            rs.getString("Personal_Health_No"),
+                            rs.getDate("Appointment_Date"),
+                            rs.getTime("Appointment_Time"),
+                            rs.getString("Status"),
+                            rs.getString("Purpose")
+                        ));
+                    }
+                    
+                    System.out.println("Total appointments found: " + count);
+                    return "{\"message\": \"Found " + count + " appointments. Check server console for details.\"}";
+                }
+            } catch (SQLException e) {
+                String errorMsg = String.format(
+                    "Error details:\n" +
+                    "Message: %s\n" +
+                    "SQL State: %s\n" +
+                    "Error Code: %d",
+                    e.getMessage(),
+                    e.getSQLState(),
+                    e.getErrorCode()
+                );
+                System.out.println(errorMsg);
+                e.printStackTrace();
+                return "{\"error\": \"" + e.getMessage() + "\"}";
             }
         });
     }
@@ -879,5 +1158,10 @@ public class Main {
         // TODO: Implement proper JWT token generation
         // For now, return a mock token
         return "mock-jwt-token-" + patient.getPersonalHealthNo();
+    }
+
+    private static Connection getConnection() throws SQLException {
+        String url = "jdbc:sqlite:healthcare.db";  // Update this path if your DB file is located elsewhere
+        return DriverManager.getConnection(url);
     }
 }

@@ -36,6 +36,8 @@ import java.nio.file.Paths;
 import javax.servlet.http.Part;
 import java.io.InputStream;
 import java.nio.file.StandardCopyOption;
+import java.util.Random;
+import java.util.Base64;
 
 //>>>>> javac --enable-preview --release 23 -cp "lib/*" -d bin src/*.java
 //>>>>> java --enable-preview -cp "bin;lib/*" Main 
@@ -58,7 +60,6 @@ public class Main {
 
     public static void main(String[] args) {
         String url = "jdbc:sqlite:db/umrs.db";
-        final Connection[] connHolder = new Connection[1];
         
         // 1. Configure static files FIRST
         try {
@@ -87,10 +88,9 @@ public class Main {
         });
 
         before((request, response) -> {
-            response.header("Access-Control-Allow-Origin", "*");
+            response.header("Access-Control-Allow-Origin", "http://localhost:3000");
             response.header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
-            response.header("Access-Control-Allow-Headers", "*");
-            response.header("Access-Control-Allow-Credentials", "true");
+            response.header("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Requested-With,Content-Length,Accept,Origin");
             
             if (request.requestMethod().equals("OPTIONS")) {
                 halt(200);
@@ -203,13 +203,23 @@ public class Main {
                 System.out.println("Username: " + username);
                 System.out.println("Portal Type: " + portalType);
 
+                // Use the shared connection from connHolder
                 Login2FADAO login2FADAO = new Login2FADAO(connHolder[0]);
                 boolean isAuthenticated = login2FADAO.login(username, password, portalType);
 
                 System.out.println("Authentication result: " + isAuthenticated);
 
                 if (isAuthenticated) {
-                    String response = gson.toJson(new ApiResponse("success", "Login successful"));
+                    // Get user details using the same connection
+                    Login2FA userLogin = login2FADAO.getLoginByUsername(username);
+                    
+                    Map<String, Object> responseMap = new HashMap<>();
+                    responseMap.put("status", "success");
+                    responseMap.put("message", "Login successful");
+                    responseMap.put("token", "mock-jwt-token-" + username);
+                    responseMap.put("user", userLogin);
+                    
+                    String response = gson.toJson(responseMap);
                     System.out.println("Sending success response: " + response);
                     return response;
                 }
@@ -262,74 +272,129 @@ public class Main {
             }
         });
 
-        post("/signup", (req, res) -> {
+        post("/api/auth/signup/:userType", (req, res) -> {
             res.type("application/json");
+            String userType = req.params(":userType");
+            
             try {
-                // Parse the JSON body
                 JsonObject jsonBody = gson.fromJson(req.body(), JsonObject.class);
-                System.out.println("Received request body: " + jsonBody);
+                System.out.println("Received signup request for " + userType + ": " + jsonBody);
 
-                // Extract and set default values
-                String userType = getStringFromJson(jsonBody, "userType");
-                String password = getStringFromJson(jsonBody, "password");
-                String twoFAPreference = getStringFromJson(jsonBody, "twoFAPreference");
+                String identifier = null;
                 
-                // Set defaults
-                if (userType == null) userType = "patient";
-                if (twoFAPreference == null) twoFAPreference = "email";
-                
-                // Create Login2FA entry
-                Login2FA newUser = new Login2FA();
-                newUser.setUserType(userType);
-                newUser.setLoginPassword(password);
-                newUser.setTwoFAPreference(twoFAPreference);
-                newUser.setTwoFACodeTimestamp(new Date());
-                
-                // Create user based on type
-                Login2FADAO login2FADAO = new Login2FADAO(connHolder[0]);
-                boolean isCreated = login2FADAO.signup(newUser, userType);
-                
-                if (!isCreated) {
-                    res.status(400);
-                    return gson.toJson(new ApiResponse("error", "Failed to create login entry"));
-                }
-
-                // Handle different user types
                 switch (userType) {
                     case "patient":
-                        Patient newPatient = new Patient();
-                        String generatedPHN = newUser.getLoginUsername();
-                        newPatient.setPersonalHealthNo(generatedPHN);
-                        newPatient.setNIC(getStringFromJson(jsonBody, "nic"));
-                        newPatient.setName(getStringFromJson(jsonBody, "name"));
-                        newPatient.setDateOfBirth(getStringFromJson(jsonBody, "dateOfBirth"));
-                        newPatient.setGender(getStringFromJson(jsonBody, "gender"));
-                        newPatient.setAddress(getStringFromJson(jsonBody, "address"));
-                        newPatient.setPhoneNumber(getStringFromJson(jsonBody, "phoneNumber"));
-                        newPatient.setEmail(getStringFromJson(jsonBody, "email"));
-                        newPatient.setEmergencyContactName(getStringFromJson(jsonBody, "emergencyContactName"));
-                        newPatient.setEmergencyContactPhone(getStringFromJson(jsonBody, "emergencyContactPhone"));
+                        try {
+                            // Generate PHN first
+                            Login2FADAO login2FADao = new Login2FADAO(connHolder[0]);
+                            String generatedPHN = login2FADao.getIdentifierForUser("patient");
+                            
+                            // Create and save patient
+                            Patient newPatient = new Patient();
+                            newPatient.setName(jsonBody.get("fullName").getAsString());
+                            newPatient.setDateOfBirth(jsonBody.get("dateOfBirth").getAsString());
+                            newPatient.setGender(jsonBody.get("gender").getAsString());
+                            newPatient.setAddress(jsonBody.get("address").getAsString());
+                            newPatient.setPhoneNumber(jsonBody.get("contactNo").getAsString());
+                            newPatient.setEmail(jsonBody.get("email").getAsString());
+                            newPatient.setNIC(jsonBody.get("nic").getAsString());
+                            newPatient.setPersonalHealthNo(generatedPHN);
+                            
+                            // Insert patient first
+                            PatientDAO patientDAO = new PatientDAO(connHolder[0]);
+                            patientDAO.insertPatient(newPatient);
+                            identifier = newPatient.getPersonalHealthNo();
+                            
+                            // Then create and insert login credentials using PHN as username
+                            Login2FA login2FA = new Login2FA();
+                            login2FA.setUserIdentifier(identifier);  // PHN as identifier
+                            login2FA.setUserType("patient");
+                            login2FA.setLoginUsername(identifier);   // PHN as username instead of email
+                            login2FA.setLoginPassword(jsonBody.get("password").getAsString());
+                            login2FA.setTwoFAPreference(jsonBody.get("twoFAPreference").getAsString());
+                            login2FA.setPortalType("patient");
+                            login2FA.setLastTwoFACode(generateSecret());
+                            
+                            // Use signup method to properly hash password and insert login record
+                            boolean loginCreated = login2FADao.signup(login2FA, "patient");
+                            
+                            if (!loginCreated) {
+                                throw new Exception("Failed to create login credentials");
+                            }
+                            
+                            // Only close connection after both operations are complete
+                            patientDAO.closeConnection();
+                            
+                            return gson.toJson(new ApiResponse("success", 
+                                "Patient registration successful. Your Personal Health Number is: " + identifier, 
+                                identifier));
+                        } catch (Exception e) {
+                            if (e.getMessage().contains("UNIQUE constraint failed")) {
+                                return gson.toJson(new ApiResponse("error", 
+                                    "This NIC is already registered. Please try logging in instead."));
+                            }
+                            throw e;
+                        }
 
-                        PatientDAO patientDAO = new PatientDAO(connHolder[0]);
-                        patientDAO.insertPatient(newPatient);
-                        return gson.toJson(new ApiResponse("success", "Registration successful", generatedPHN));
+                    case "professional":
+                        try {
+                            HealthcareProfessional newProfessional = new HealthcareProfessional();
+                            newProfessional.setName(jsonBody.get("fullName").getAsString());
+                            newProfessional.setSlmcNo(jsonBody.get("slmcNumber").getAsString());
+                            newProfessional.setSpecialty(jsonBody.get("specialty").getAsString());
+                            newProfessional.setRole(jsonBody.get("role").getAsString());
+                            newProfessional.setEmail(jsonBody.get("email").getAsString());
+                            newProfessional.setPhoneNumber(jsonBody.get("contactNo").getAsString());
+                            newProfessional.setAddress(jsonBody.get("address").getAsString());
+                            newProfessional.setNic(jsonBody.get("nic").getAsString());
+                            
+                            HealthcareProfessionalDAO professionalDAO = new HealthcareProfessionalDAO(connHolder[0]);
+                            professionalDAO.insertHealthcareProfessional(newProfessional);
+                            identifier = newProfessional.getSlmcNo();
+                            
+                            return gson.toJson(new ApiResponse("success", 
+                                "Healthcare Professional registration successful. Your SLMC Number is: " + identifier, 
+                                identifier));
+                        } catch (Exception e) {
+                            if (e.getMessage().contains("UNIQUE constraint failed")) {
+                                return gson.toJson(new ApiResponse("error", 
+                                    "This NIC or SLMC number is already registered. Please try logging in instead."));
+                            }
+                            throw e;
+                        }
 
-                    case "healthcare_professional":
-                        // Add healthcare professional handling here if needed
-                        break;
-
-                    case "healthcare_institute":
-                        // Add healthcare institute handling here if needed
-                        break;
+                    case "institute":
+                        try {
+                            HealthcareInstitute newInstitute = new HealthcareInstitute(
+                                jsonBody.get("instituteName").getAsString(),
+                                jsonBody.get("address").getAsString(),
+                                jsonBody.get("instituteType").getAsString(),
+                                jsonBody.get("email").getAsString(),
+                                jsonBody.get("contactNo").getAsString(),
+                                null  // healthInstituteNumber - this will be generated
+                            );
+                            
+                            HealthcareInstituteDAO instituteDAO = new HealthcareInstituteDAO(connHolder[0]);
+                            instituteDAO.insertHealthcareInstitute(newInstitute);
+                            identifier = newInstitute.getHealthInstituteNumber();
+                            
+                            return gson.toJson(new ApiResponse("success", 
+                                "Healthcare Institute registration successful. Your Institute Number is: " + identifier, 
+                                identifier));
+                        } catch (Exception e) {
+                            if (e.getMessage().contains("UNIQUE constraint failed")) {
+                                return gson.toJson(new ApiResponse("error", 
+                                    "This institute is already registered. Please try logging in instead."));
+                            }
+                            throw e;
+                        }
 
                     default:
                         res.status(400);
                         return gson.toJson(new ApiResponse("error", "Invalid user type"));
                 }
-                
-                return gson.toJson(new ApiResponse("success", "User created successfully"));
-                
             } catch (Exception e) {
+                System.err.println("Error in signup endpoint: " + e.getMessage());
                 e.printStackTrace();
                 res.status(500);
                 return gson.toJson(new ApiResponse("error", "Registration failed: " + e.getMessage()));
@@ -1161,7 +1226,14 @@ public class Main {
     }
 
     private static Connection getConnection() throws SQLException {
-        String url = "jdbc:sqlite:healthcare.db";  // Update this path if your DB file is located elsewhere
+        String url = "jdbc:sqlite:db/umrs.db";  // Updated to match the DB path used elsewhere
         return DriverManager.getConnection(url);
+    }
+
+    private static String generateSecret() {
+        Random random = new Random();
+        byte[] bytes = new byte[20];
+        random.nextBytes(bytes);
+        return Base64.getEncoder().encodeToString(bytes);
     }
 }

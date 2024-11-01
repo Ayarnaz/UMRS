@@ -1,5 +1,3 @@
-import java.security.SecureRandom;
-import java.util.Date;
 
 public class Login2FA {
     private int loginID;

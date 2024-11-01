@@ -1,5 +1,5 @@
-import java.sql.*;
 import java.security.SecureRandom;
+import java.sql.*;
 
 public class Login2FADAO {
     private Connection conn;
@@ -55,7 +55,10 @@ public class Login2FADAO {
                 login.setTwoFACodeTimestamp(timestamp != null ? 
                                             new java.util.Date(timestamp.getTime()) : 
                                             new java.util.Date());
-    }
+                System.out.println("User found: " + login.getLoginUsername());
+            } else {
+                System.out.println("No user found with username: " + username);
+            }
         } catch (SQLException e) {
             System.out.println("Error retrieving login by username: " + e.getMessage());
         }
@@ -65,80 +68,81 @@ public class Login2FADAO {
 
     // Signup a new user
     public boolean signup(Login2FA newUser, String portalType) {
-
-        newUser.setPortalType(portalType);
-
-        // Validate input fields
-        if (newUser.getLoginUsername() == null || newUser.getLoginUsername().trim().isEmpty()) {
-            System.out.println("Username cannot be empty.");
+        try {
+            // Debug prints
+            System.out.println("Starting signup process...");
+            System.out.println("User type: " + newUser.getUserType());
+            
+            newUser.setPortalType(portalType);
+            
+            // Simply use the username as the identifier
+            newUser.setUserIdentifier(newUser.getLoginUsername());
+            
+            // Hash the password
+            byte[] salt = new byte[16];
+            SecureRandom random = new SecureRandom();
+            random.nextBytes(salt);
+            String hashedPassword = PasswordUtil.hashPassword(newUser.getLoginPassword(), salt);
+            
+            // Set the hashed password and salt
+            newUser.setLoginPassword(hashedPassword);
+            newUser.setSalt(salt);
+            
+            // Insert into database
+            String sql = "INSERT INTO Login_2FA (User_Type, User_Identifier, Login_Username, " +
+                        "Login_Password, Salt, Portal_Type, TwoFA_Preference) " +
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)";
+            
+            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                pstmt.setString(1, newUser.getUserType());
+                pstmt.setString(2, newUser.getUserIdentifier());
+                pstmt.setString(3, newUser.getLoginUsername());
+                pstmt.setString(4, newUser.getLoginPassword());
+                pstmt.setBytes(5, newUser.getSalt());
+                pstmt.setString(6, newUser.getPortalType());
+                pstmt.setString(7, newUser.getTwoFAPreference());
+                
+                int result = pstmt.executeUpdate();
+                System.out.println("Insert result: " + result);
+                return result > 0;
+            }
+        } catch (SQLException e) {
+            System.err.println("Database error during signup: " + e.getMessage());
+            e.printStackTrace();
+            return false;
+        } catch (Exception e) {
+            System.err.println("General error during signup: " + e.getMessage());
+            e.printStackTrace();
             return false;
         }
-        
-        if (newUser.getLoginPassword() == null || newUser.getLoginPassword().length() < 6) {
-            System.out.println("Password must be at least 6 characters long.");
-            return false;
-        }
-
-        
-        // Check if username already exists
-        if (getLoginByUsername(newUser.getLoginUsername()) != null) {
-            System.out.println("Username already exists!");
-            return false;
-        }
-        // Handle different user types
-        if (newUser.getUserType().equals("patient")) {
-            // Generate Personal Health Number for patient
-            String generatedPHN = generatePersonalHealthNumber();
-            newUser.setLoginUsername(generatedPHN);
-        } else if (newUser.getUserType().equals("healthcare_professional")) {
-            // Use SLMC number as username
-            newUser.setLoginUsername(newUser.getUserIdentifier()); // Assuming userIdentifier is SLMC_No
-        } else if (newUser.getUserType().equals("institute")) {
-            // Use Institute number as username
-            newUser.setLoginUsername(newUser.getUserIdentifier()); // Assuming userIdentifier is Institute_No
-        }
-        
-        // Hash the password
-        byte[] salt = new byte[16]; // Generate a random salt
-        SecureRandom random = new SecureRandom();
-        random.nextBytes(salt);
-        String hashedPassword = PasswordUtil.hashPassword(newUser.getLoginPassword(), salt);
-        newUser.setLoginPassword(hashedPassword); // Set the hashed password
-        newUser.setSalt(salt); // Set the salt value
-        
-        // Debug: Output the hashed password
-        System.out.println("Hashed Password: " + hashedPassword);
-        
-        // Insert new login entry
-        insertLogin(newUser);
-        System.out.println("Signup successful!");
-        return true;
-    }
-
-    // Generate a unique Personal Health number for patients
-    private String generatePersonalHealthNumber() {
-        // Example: Generate a random 10-digit number
-        SecureRandom random = new SecureRandom();
-        int phn = 1000000000 + random.nextInt(900000000); // Random 10-digit number
-        return String.valueOf(phn);
     }
 
     // Login method
     public boolean login(String username, String password, String portalType) {
-        Login2FA login = getLoginByUsername(username);
-        if (login != null) {
-            // Verify the password
-            boolean isVerified = PasswordUtil.verifyPassword(password, login.getLoginPassword(), login.getSalt());
-
-            // Debug: Show the verification result
-            System.out.println("Password verification result: " + isVerified);
-
-            // Check if the portal type matches
-            if (isVerified && login.getPortalType().equals(portalType)) {
-                return true;
+        System.out.println("\n=== Attempting Database Login ===");
+        String sql = "SELECT * FROM Login_2FA WHERE Login_Username = ? AND Portal_Type = ?";
+        
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, username);
+            pstmt.setString(2, portalType);
+            
+            ResultSet rs = pstmt.executeQuery();
+            
+            if (rs.next()) {
+                String storedPassword = rs.getString("Login_Password");
+                byte[] salt = rs.getBytes("Salt");
+                
+                // Hash the provided password with the stored salt
+                String hashedPassword = PasswordUtil.hashPassword(password, salt);
+                
+                // Compare the hashed passwords
+                boolean matches = storedPassword.equals(hashedPassword);
+                return matches;
             }
+        } catch (SQLException e) {
+            System.out.println("Database error during login:");
+            e.printStackTrace();
         }
-        System.out.println("User  not found or portal type does not match!");
         return false;
     }
 
@@ -177,6 +181,34 @@ public class Login2FADAO {
             System.out.println("Error enabling 2FA: " + e.getMessage());
         }
     }
+
+    public boolean identifierExists(String identifier) throws SQLException {
+        String sql = "SELECT COUNT(*) FROM Login_2FA WHERE Login_Username = ?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, identifier);
+            ResultSet rs = pstmt.executeQuery();
+            return rs.getInt(1) > 0;
+        }
+    }
+
+    // Add this new method
+    public String getIdentifierForUser(String userType) {
+        if (userType == null || userType.isEmpty()) {
+            throw new IllegalArgumentException("User type is required");
+        }
+
+        if ("patient".equalsIgnoreCase(userType)) {
+            return "PHN" + generatePersonalHealthNumber();
+        }
+        
+        return null; // For other types, identifier should be provided externally
+    }
+
+    private String generatePersonalHealthNumber() {
+        SecureRandom random = new SecureRandom();
+        // Generate a 7-digit number (since we're adding "PHN" prefix)
+        return String.format("%07d", random.nextInt(10000000));
+    }
 }
 
 //summary of the changes made:
@@ -186,3 +218,4 @@ public class Login2FADAO {
 //Removed password hashing from the Login2FA constructor.
 //Stored the salt value used to hash the password in the Login2FA object.
 //Used the stored salt value to hash the password during login.
+

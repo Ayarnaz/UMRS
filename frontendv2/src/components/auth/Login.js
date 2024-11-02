@@ -24,7 +24,19 @@ function Login() {
     const [showInstituteModal, setShowInstituteModal] = useState(false);
 
     const handlePortalChange = (portal) => {
-        setFormData({ ...formData, portalType: portal });
+        let backendPortalType;
+        switch(portal) {
+            case 'healthcare_professional':
+                backendPortalType = 'professional';
+                break;
+            case 'healthcare_institute':
+                backendPortalType = 'institute';
+                break;
+            default:
+                backendPortalType = portal;
+        }
+        
+        setFormData({ ...formData, portalType: backendPortalType });
         setShowCredentials(false);
         setError('');
     };
@@ -59,7 +71,20 @@ function Login() {
             const success = await login(formData);
             if (success) {
                 setLoading(false);
-                navigate('/dashboard', { replace: true });
+                // Redirect based on portal type
+                switch(formData.portalType) {
+                    case 'patient':
+                        navigate('/dashboard', { replace: true });
+                        break;
+                    case 'professional':
+                        navigate('/professional/dashboard', { replace: true });
+                        break;
+                    case 'institute':
+                        navigate('/institute/dashboard', { replace: true });
+                        break;
+                    default:
+                        navigate('/dashboard', { replace: true });
+                }
                 return;
             }
         } catch (error) {
@@ -73,9 +98,9 @@ function Login() {
         switch(formData.portalType) {
             case 'patient':
                 return "Personal Health Number";
-            case 'healthcare_professional':
+            case 'professional':
                 return "SLMC Number";
-            case 'healthcare_institute':
+            case 'institute':
                 return "Healthcare Institute Number";
             default:
                 return "Username";
@@ -131,7 +156,7 @@ function Login() {
                         <button
                             onClick={() => handlePortalChange('healthcare_professional')}
                             className={`flex flex-col items-center p-4 rounded-lg transition-all w-32 h-24 ${
-                                formData.portalType === 'healthcare_professional'
+                                formData.portalType === 'professional'
                                 ? 'bg-indigo-100 text-indigo-700 shadow-md'
                                 : 'bg-gray-50 text-gray-500 hover:bg-gray-100'
                             }`}
@@ -143,7 +168,7 @@ function Login() {
                         <button
                             onClick={() => handlePortalChange('healthcare_institute')}
                             className={`flex flex-col items-center p-4 rounded-lg transition-all w-32 h-24 ${
-                                formData.portalType === 'healthcare_institute'
+                                formData.portalType === 'institute'
                                 ? 'bg-indigo-100 text-indigo-700 shadow-md'
                                 : 'bg-gray-50 text-gray-500 hover:bg-gray-100'
                             }`}
@@ -210,9 +235,11 @@ function Login() {
                                 onClick={handleRegisterClick}
                                 className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-indigo-600 bg-indigo-50 hover:bg-indigo-100"
                             >
-                                Register as {formData.portalType === 'patient' ? 'Patient' : 
-                                           formData.portalType === 'healthcare_professional' ? 'Healthcare Professional' : 
-                                           'Healthcare Institute'}
+                                Register as {
+                                    formData.portalType === 'patient' ? 'Patient' : 
+                                    formData.portalType === 'professional' ? 'Healthcare Professional' : 
+                                    'Healthcare Institute'
+                                }
                             </button>
                         </div>
                     </div>

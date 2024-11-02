@@ -38,6 +38,8 @@ import java.io.InputStream;
 import java.nio.file.StandardCopyOption;
 import java.util.Random;
 import java.util.Base64;
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
 
 //>>>>> javac --enable-preview --release 23 -cp "lib/*" -d bin src/*.java
 //>>>>> java --enable-preview -cp "bin;lib/*" Main 
@@ -57,8 +59,46 @@ public class Main {
         .setLenient()
         .create();
     private static final String UPLOAD_DIR = "uploads";
+    private static HikariDataSource dataSource;
+    private static final Object DB_LOCK = new Object();
+    private static RecordAccessDAO recordAccessDAO;
+
+    // Initialize the connection pool
+    private static void initializeDataSource() {
+        HikariConfig config = new HikariConfig();
+        config.setJdbcUrl("jdbc:sqlite:db/umrs.db");
+        config.setMaximumPoolSize(10);
+        config.setMinimumIdle(5);
+        config.setConnectionTimeout(30000);
+        config.setIdleTimeout(600000);
+        config.setMaxLifetime(1800000);
+        config.addDataSourceProperty("journal_mode", "WAL");
+        config.addDataSourceProperty("busy_timeout", "30000");
+        config.addDataSourceProperty("synchronous", "NORMAL");
+        dataSource = new HikariDataSource(config);
+    }
+
+    // Update the getConnection method
+    private static Connection getConnection() throws SQLException {
+        synchronized (DB_LOCK) {
+            Connection conn = DriverManager.getConnection("jdbc:sqlite:db/umrs.db");
+            conn.setAutoCommit(true);
+            // Set timeout for acquiring locks
+            try (Statement stmt = conn.createStatement()) {
+                stmt.execute("PRAGMA busy_timeout = 5000");
+            }
+            return conn;
+        }
+    }
 
     public static void main(String[] args) {
+        // Initialize HikariCP first
+        initializeDataSource();
+        System.out.println("DataSource initialized: " + (dataSource != null));
+        
+        // Initialize RecordAccessDAO after dataSource
+        recordAccessDAO = new RecordAccessDAO(dataSource); // Pass dataSource to constructor
+        
         String url = "jdbc:sqlite:db/umrs.db";
         
         // 1. Configure static files FIRST
@@ -347,14 +387,37 @@ public class Main {
                             newProfessional.setPhoneNumber(jsonBody.get("contactNo").getAsString());
                             newProfessional.setAddress(jsonBody.get("address").getAsString());
                             newProfessional.setNic(jsonBody.get("nic").getAsString());
+                            newProfessional.setHealthInstituteNumber(jsonBody.get("healthInstituteNumber").getAsString());
                             
+                            // Insert professional first
                             HealthcareProfessionalDAO professionalDAO = new HealthcareProfessionalDAO(connHolder[0]);
                             professionalDAO.insertHealthcareProfessional(newProfessional);
                             identifier = newProfessional.getSlmcNo();
                             
+                            // Create login credentials
+                            Login2FA login2FA = new Login2FA();
+                            login2FA.setUserIdentifier(identifier);  // SLMC as identifier
+                            login2FA.setUserType("professional");
+                            login2FA.setLoginUsername(identifier);   // SLMC as username
+                            login2FA.setLoginPassword(jsonBody.get("password").getAsString());
+                            login2FA.setTwoFAPreference(jsonBody.get("twoFAPreference").getAsString());
+                            login2FA.setPortalType("professional");
+                            login2FA.setLastTwoFACode(generateSecret());
+                            
+                            // Insert login credentials
+                            Login2FADAO login2FADao = new Login2FADAO(connHolder[0]);
+                            boolean loginCreated = login2FADao.signup(login2FA, "professional");
+                            
+                            if (!loginCreated) {
+                                // Rollback professional creation if login creation fails
+                                professionalDAO.deleteHealthcareProfessional(identifier);
+                                throw new Exception("Failed to create login credentials");
+                            }
+                            
                             return gson.toJson(new ApiResponse("success", 
                                 "Healthcare Professional registration successful. Your SLMC Number is: " + identifier, 
                                 identifier));
+                                
                         } catch (Exception e) {
                             if (e.getMessage().contains("UNIQUE constraint failed")) {
                                 return gson.toJson(new ApiResponse("error", 
@@ -1155,6 +1218,127 @@ public class Main {
                 return "{\"error\": \"" + e.getMessage() + "\"}";
             }
         });
+
+        // Add this endpoint for healthcare professional dashboard
+        get("/api/professional/dashboard", (req, res) -> {
+            res.type("application/json");
+            try {
+                String slmcNo = req.queryParams("slmcNo");
+                if (slmcNo == null || slmcNo.isEmpty()) {
+                    res.status(400);
+                    return gson.toJson(new ApiResponse("error", "SLMC Number is required"));
+                }
+
+                HealthcareProfessionalDAO professionalDAO = new HealthcareProfessionalDAO(connHolder[0]);
+                HealthcareProfessional professional = professionalDAO.getHealthcareProfessional(slmcNo);
+
+                if (professional != null) {
+                    Map<String, Object> stats = new HashMap<>();
+                    stats.put("todayAppointments", getTodayAppointmentsCount(slmcNo));
+                    stats.put("pendingReports", getPendingReportsCount(slmcNo));
+                    stats.put("activePatients", getActivePatientsCount(slmcNo));
+
+                    Map<String, Object> dashboardData = new HashMap<>();
+                    dashboardData.put("professional", professional);
+                    dashboardData.put("stats", stats);
+
+                    return gson.toJson(dashboardData);
+                } else {
+                    res.status(404);
+                    return gson.toJson(new ApiResponse("error", "Healthcare Professional not found"));
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", "Server error: " + e.getMessage()));
+            }
+        });
+
+        // Add these endpoints after the existing ones
+        // Endpoint for requesting record access
+        get("/api/professional/patient-lookup", (req, res) -> {
+            res.type("application/json");
+            String searchTerm = req.queryParams("search");
+            
+            try (Connection conn = getConnection()) {
+                conn.setAutoCommit(true);
+                
+                String sql = "SELECT Personal_Health_No, Name, Date_of_Birth " +
+                            "FROM Patient " +
+                            "WHERE Personal_Health_No LIKE ? OR Name LIKE ?";
+                
+                try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                    String searchPattern = "%" + searchTerm + "%";
+                    pstmt.setString(1, searchPattern);
+                    pstmt.setString(2, searchPattern);
+                    
+                    ResultSet rs = pstmt.executeQuery();
+                    
+                    if (rs.next()) {
+                        Map<String, Object> patient = new HashMap<>();
+                        patient.put("personalHealthNo", rs.getString("Personal_Health_No"));
+                        patient.put("name", rs.getString("Name"));
+                        patient.put("dateOfBirth", rs.getString("Date_of_Birth"));
+                        return gson.toJson(patient);
+                    } else {
+                        res.status(404);
+                        return gson.toJson(new ApiResponse("error", "Patient not found"));
+                    }
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", "Database error: " + e.getMessage()));
+            }
+        });
+
+        post("/api/professional/request-access", (req, res) -> {
+            res.type("application/json");
+            try {
+                String requestBody = req.body();
+                System.out.println("Request body: " + requestBody);
+                
+                JsonObject jsonRequest = JsonParser.parseString(requestBody).getAsJsonObject();
+                System.out.println("Parsed JSON request: " + jsonRequest);
+                
+                RecordAccess recordAccess = new RecordAccess();
+                recordAccess.setPhn(jsonRequest.get("personalHealthNo").getAsString());
+                recordAccess.setSlmcNo(jsonRequest.get("slmcNo").getAsString());
+                recordAccess.setPurpose(jsonRequest.get("purpose").getAsString());
+                recordAccess.setEmergency(jsonRequest.get("isEmergency").getAsBoolean());
+                
+                // Use the existing recordAccessDAO instance
+                boolean success = recordAccessDAO.createAccessRequest(recordAccess);
+                
+                if (success) {
+                    return gson.toJson(new ApiResponse("success", "Access request created successfully"));
+                } else {
+                    res.status(500);
+                    return gson.toJson(new ApiResponse("error", "Failed to create access request"));
+                }
+                
+            } catch (Exception e) {
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", "Server error: " + e.getMessage()));
+            }
+        });
+
+        // Update the records-data endpoint
+        get("/api/professional/records-data", (req, res) -> {
+            res.type("application/json");
+            String slmcNo = req.queryParams("slmcNo");
+            System.out.println("Received records-data request for SLMC: " + slmcNo);
+            
+            try {
+                // Use the existing recordAccessDAO instance
+                Map<String, List<Map<String, Object>>> data = recordAccessDAO.getRecordsData(slmcNo);
+                return gson.toJson(data);
+            } catch (Exception e) {
+                e.printStackTrace();
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", "Failed to fetch records: " + e.getMessage()));
+            }
+        });
     }
 
     // Move this method outside of main
@@ -1225,15 +1409,84 @@ public class Main {
         return "mock-jwt-token-" + patient.getPersonalHealthNo();
     }
 
-    private static Connection getConnection() throws SQLException {
-        String url = "jdbc:sqlite:db/umrs.db";  // Updated to match the DB path used elsewhere
-        return DriverManager.getConnection(url);
+    // Add these methods after the main method in Main.java
+
+    private static int getTodayAppointmentsCount(String slmcNo) {
+        String sql = "SELECT COUNT(*) as count FROM Appointment " +
+                     "WHERE SLMC_No = ? AND Appointment_Date = DATE('now') " +
+                     "AND Status != 'cancelled'";
+        
+        try (Connection conn = getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            
+            pstmt.setString(1, slmcNo);
+            ResultSet rs = pstmt.executeQuery();
+            
+            if (rs.next()) {
+                return rs.getInt("count");
+            }
+        } catch (SQLException e) {
+            System.out.println("Error getting today's appointments count: " + e.getMessage());
+        }
+        return 0;
     }
 
+    private static int getPendingReportsCount(String slmcNo) {
+        String sql = "SELECT COUNT(*) as count FROM Record_Access_Requests " +
+                     "WHERE SLMC_No = ? AND Status = 'pending'";
+        
+        try (Connection conn = getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            
+            pstmt.setString(1, slmcNo);
+            ResultSet rs = pstmt.executeQuery();
+            
+            if (rs.next()) {
+                return rs.getInt("count");
+            }
+        } catch (SQLException e) {
+            System.out.println("Error getting pending reports count: " + e.getMessage());
+        }
+        return 0;
+    }
+
+    private static int getActivePatientsCount(String slmcNo) {
+        // This will count unique patients with appointments in the last 30 days
+        String sql = "SELECT COUNT(DISTINCT Personal_Health_No) as count " +
+                     "FROM Appointment " +
+                     "WHERE SLMC_No = ? " +
+                     "AND Appointment_Date >= date('now', '-30 days') " +
+                     "AND Status != 'cancelled'";
+        
+        try (Connection conn = getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            
+            pstmt.setString(1, slmcNo);
+            ResultSet rs = pstmt.executeQuery();
+            
+            if (rs.next()) {
+                return rs.getInt("count");
+            }
+        } catch (SQLException e) {
+            System.out.println("Error getting active patients count: " + e.getMessage());
+        }
+        return 0;
+    }
+
+    // Add this method to the Main class
     private static String generateSecret() {
+        // Generate a random string of 6 digits
         Random random = new Random();
-        byte[] bytes = new byte[20];
-        random.nextBytes(bytes);
-        return Base64.getEncoder().encodeToString(bytes);
+        int number = random.nextInt(999999);
+        // Format the number to ensure it's 6 digits with leading zeros if needed
+        return String.format("%06d", number);
+    }
+
+    // Add this method to Main class
+    public static HikariDataSource getDataSource() {
+        if (dataSource == null) {
+            throw new IllegalStateException("DataSource has not been initialized");
+        }
+        return dataSource;
     }
 }

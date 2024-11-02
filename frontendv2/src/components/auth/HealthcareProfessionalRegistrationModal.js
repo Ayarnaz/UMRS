@@ -3,6 +3,7 @@ import { Check } from 'lucide-react';
 import Modal from '../common/Modal';
 import { useRegistration } from '../../hooks/useRegistration';
 import { professionalValidationRules } from '../../utils/validationRules';
+import { useNotification } from '../../context/NotificationContext';
 
 const initialValues = {
     fullName: '',
@@ -14,7 +15,8 @@ const initialValues = {
     email: '',
     contactNo: '',
     password: '',
-    twoFAPreference: 'email-sms'
+    twoFAPreference: 'email-sms',
+    healthInstituteNumber: ''
 };
 
 const specialties = [
@@ -32,16 +34,40 @@ const roles = [
     { value: 'surgeon', label: 'Surgeon' }
 ];
 
+const healthcareInstitutes = [
+    { value: 'HI001', label: 'General Hospital Colombo' },
+    { value: 'HI002', label: 'National Hospital of Sri Lanka' },
+    { value: 'HI003', label: 'Lady Ridgeway Hospital' },
+    { value: 'HI004', label: 'Colombo South Teaching Hospital' }
+];
+
 export default function HealthcareProfessionalRegistrationModal({ isOpen, onClose }) {
     const {
         values,
         errors,
         isLoading,
-        notification,
         handleChange,
         handleSubmit,
-        closeNotification
     } = useRegistration(initialValues, professionalValidationRules, 'professional');
+
+    const { showNotification } = useNotification();
+
+    const onSubmit = async (e) => {
+        e.preventDefault();
+        try {
+            const response = await handleSubmit(e);
+            const data = await response.json();
+
+            if (data.status === 'success') {
+                showNotification(data.message, 'success');
+                onClose();
+            } else {
+                showNotification(data.message || 'Registration failed', 'error');
+            }
+        } catch (error) {
+            showNotification(error.message || 'An unexpected error occurred', 'error');
+        }
+    };
 
     const renderField = (name, label, type = 'text', options = null) => {
         const hasError = errors[name];
@@ -93,7 +119,7 @@ export default function HealthcareProfessionalRegistrationModal({ isOpen, onClos
             title="REGISTER AS A HEALTHCARE PROFESSIONAL"
             size="sm"
         >
-            <form onSubmit={handleSubmit}>
+            <form onSubmit={onSubmit}>
                 <div className="modal-form-container">
                     <div className="modal-form-content">
                         {renderField('fullName', 'Full Name')}
@@ -108,6 +134,10 @@ export default function HealthcareProfessionalRegistrationModal({ isOpen, onClos
                             <div className="space-y-2">
                                 {renderField('role', 'Role', 'select', roles)}
                             </div>
+                        </div>
+
+                        <div className="space-y-2">
+                            {renderField('healthInstituteNumber', 'Healthcare Institute', 'select', healthcareInstitutes)}
                         </div>
 
                         {renderField('email', 'Email', 'email')}

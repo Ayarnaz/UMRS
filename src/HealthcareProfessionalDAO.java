@@ -4,15 +4,8 @@ public class HealthcareProfessionalDAO {
 
     private Connection conn;
 
-    public HealthcareProfessionalDAO() {
-        // Initialize the connection
-        String url = "jdbc:sqlite:db/umrs.db";
-        try {
-            conn = DriverManager.getConnection(url);
-            //System.out.println("Connected to the database.");
-        } catch (SQLException e) {
-            System.out.println("Connection failed: " + e.getMessage());
-        }
+    public HealthcareProfessionalDAO(Connection conn) {
+        this.conn = conn;
     }
 
     // Method to close the connection

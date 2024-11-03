@@ -56,12 +56,14 @@ CREATE TABLE IF NOT EXISTS Medical_Record (
 CREATE TABLE IF NOT EXISTS Medical_Document (
     Document_ID INTEGER PRIMARY KEY AUTOINCREMENT,
     Record_ID INTEGER,
+    Personal_Health_No TEXT,
     Document_Type TEXT,
     File_Path TEXT,
     Upload_Date DATE,
     Uploaded_By TEXT,
     Details TEXT,
-    FOREIGN KEY (Record_ID) REFERENCES Medical_Record(Record_ID) ON DELETE CASCADE
+    FOREIGN KEY (Record_ID) REFERENCES Medical_Record(Record_ID) ON DELETE CASCADE,
+    FOREIGN KEY (Personal_Health_No) REFERENCES PATIENT(Personal_Health_No) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS Appointment (
@@ -79,7 +81,7 @@ CREATE TABLE IF NOT EXISTS Appointment (
     FOREIGN KEY (Health_Institute_Number) REFERENCES Healthcare_Institute(Health_Institute_Number) ON DELETE CASCADE
 );
 
-DROP TABLE IF EXISTS Login_2FA;
+/*DROP TABLE IF EXISTS Login_2FA;*/
 
 CREATE TABLE IF NOT EXISTS Login_2FA (
     Login_ID INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -96,8 +98,97 @@ CREATE TABLE IF NOT EXISTS Login_2FA (
 
 /*DELETE FROM Login_2FA;*/
 
+CREATE TABLE IF NOT EXISTS Activity (
+    Activity_ID INTEGER PRIMARY KEY AUTOINCREMENT,
+    Personal_Health_No TEXT NOT NULL,
+    Description TEXT NOT NULL,
+    Date DATETIME NOT NULL,
+    FOREIGN KEY (Personal_Health_No) REFERENCES Patient(Personal_Health_No)
+);
+
+/*DROP TABLE IF EXISTS Record_Access_Requests;*/
+
+CREATE TABLE IF NOT EXISTS Record_Access_Requests (
+    Request_ID INTEGER PRIMARY KEY AUTOINCREMENT,
+    Personal_Health_No TEXT NOT NULL,  -- Changed from PHN
+    SLMC_No TEXT,
+    Institute_No TEXT,
+    Purpose TEXT,
+    Is_Emergency BOOLEAN DEFAULT 0,
+    Status TEXT DEFAULT 'pending',
+    Request_Date DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (Personal_Health_No) REFERENCES Patient(Personal_Health_No),
+    FOREIGN KEY (SLMC_No) REFERENCES Healthcare_Professional(SLMC_No),
+    FOREIGN KEY (Institute_No) REFERENCES Healthcare_Institute(Institute_No),
+    CHECK ((SLMC_No IS NOT NULL AND Institute_No IS NULL) OR 
+           (SLMC_No IS NULL AND Institute_No IS NOT NULL))
+);
+
+
+
+/*ALTER TABLE Medical_Record ADD COLUMN Summary TEXT;*/
+/*ALTER TABLE Medical_Record ADD COLUMN Type TEXT;*/
+/*ALTER TABLE PATIENT ADD COLUMN auth_token TEXT;*/
+
+-- Add Personal_Health_No column
+/*ALTER TABLE Medical_Document ADD COLUMN Personal_Health_No TEXT;*/
+
+-- Add foreign key constraint
+/*ALTER TABLE Medical_Document ADD CONSTRAINT fk_document_patient 
+FOREIGN KEY (Personal_Health_No) REFERENCES PATIENT(Personal_Health_No) ON DELETE CASCADE;*/
+
+CREATE TABLE IF NOT EXISTS Record_Requests (
+    request_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    requester_slmc TEXT,
+    requester_institute_id TEXT,
+    receiver_slmc TEXT,
+    receiver_institute_id TEXT,
+    patient_phn TEXT NOT NULL,
+    record_type TEXT NOT NULL,
+    purpose TEXT,
+    status TEXT NOT NULL,
+    request_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    requester_type TEXT NOT NULL CHECK (requester_type IN ('PROFESSIONAL', 'INSTITUTE')),
+    receiver_type TEXT NOT NULL CHECK (receiver_type IN ('PROFESSIONAL', 'INSTITUTE')),
+    FOREIGN KEY (requester_slmc) REFERENCES Healthcare_Professional(SLMC_No),
+    FOREIGN KEY (requester_institute_id) REFERENCES Healthcare_Institute(Institute_ID),
+    FOREIGN KEY (receiver_slmc) REFERENCES Healthcare_Professional(SLMC_No),
+    FOREIGN KEY (receiver_institute_id) REFERENCES Healthcare_Institute(Institute_ID),
+    FOREIGN KEY (patient_phn) REFERENCES Patient(Personal_Health_No),
+    CHECK ((requester_slmc IS NOT NULL AND requester_institute_id IS NULL) OR 
+           (requester_slmc IS NULL AND requester_institute_id IS NOT NULL)),
+    CHECK ((receiver_slmc IS NOT NULL AND receiver_institute_id IS NULL) OR 
+           (receiver_slmc IS NULL AND receiver_institute_id IS NOT NULL))
+);
+
+CREATE TABLE IF NOT EXISTS Shared_Records (
+    record_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sender_slmc TEXT,
+    sender_institute_id TEXT,
+    receiver_slmc TEXT,
+    receiver_institute_id TEXT,
+    patient_phn TEXT NOT NULL,
+    record_type TEXT NOT NULL,
+    sub_type TEXT,
+    file_path TEXT,
+    status TEXT NOT NULL,
+    share_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    sender_type TEXT NOT NULL CHECK (sender_type IN ('PROFESSIONAL', 'INSTITUTE')),
+    receiver_type TEXT NOT NULL CHECK (receiver_type IN ('PROFESSIONAL', 'INSTITUTE')),
+    FOREIGN KEY (sender_slmc) REFERENCES Healthcare_Professional(SLMC_No),
+    FOREIGN KEY (sender_institute_id) REFERENCES Healthcare_Institute(Institute_ID),
+    FOREIGN KEY (receiver_slmc) REFERENCES Healthcare_Professional(SLMC_No),
+    FOREIGN KEY (receiver_institute_id) REFERENCES Healthcare_Institute(Institute_ID),
+    FOREIGN KEY (patient_phn) REFERENCES Patient(Personal_Health_No),
+    CHECK ((sender_slmc IS NOT NULL AND sender_institute_id IS NULL) OR 
+           (sender_slmc IS NULL AND sender_institute_id IS NOT NULL)),
+    CHECK ((receiver_slmc IS NOT NULL AND receiver_institute_id IS NULL) OR 
+           (receiver_slmc IS NULL AND receiver_institute_id IS NOT NULL))
+);
 
 -- Indexes for columns that will frequently be queried to improve performance
 CREATE INDEX IF NOT EXISTS idx_patient_email ON PATIENT(Email);
 CREATE INDEX IF NOT EXISTS idx_healthcare_professional_email ON Healthcare_Professional(Email);
 CREATE INDEX IF NOT EXISTS idx_institute_email ON Healthcare_Institute(Email);
+CREATE INDEX IF NOT EXISTS idx_medical_document_phn ON Medical_Document(Personal_Health_No);
+CREATE INDEX IF NOT EXISTS idx_medical_record_phn ON Medical_Record(Personal_Health_No);

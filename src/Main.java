@@ -62,6 +62,7 @@ public class Main {
     private static HikariDataSource dataSource;
     private static final Object DB_LOCK = new Object();
     private static RecordAccessDAO recordAccessDAO;
+    private static RecordSharingDAO recordSharingDAO;
 
     // Initialize the connection pool
     private static void initializeDataSource() {
@@ -1337,6 +1338,348 @@ public class Main {
                 e.printStackTrace();
                 res.status(500);
                 return gson.toJson(new ApiResponse("error", "Failed to fetch records: " + e.getMessage()));
+            }
+        });
+
+        // Add these endpoints
+        get("/api/professional/shared-records", (req, res) -> {
+            res.type("application/json");
+            String id = req.queryParams("slmcNo");
+            String type = "PROFESSIONAL";
+            
+            try {
+                List<RecordSharing> records = recordSharingDAO.getSharedRecords(id, type);
+                return gson.toJson(records);
+            } catch (Exception e) {
+                e.printStackTrace();
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", "Failed to fetch shared records"));
+            }
+        });
+
+        get("/api/institute/shared-records", (req, res) -> {
+            res.type("application/json");
+            String id = req.queryParams("instituteId");
+            String type = "INSTITUTE";
+            
+            try {
+                List<RecordSharing> records = recordSharingDAO.getSharedRecords(id, type);
+                return gson.toJson(records);
+            } catch (Exception e) {
+                e.printStackTrace();
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", "Failed to fetch shared records"));
+            }
+        });
+
+        get("/api/professional/record-requests", (req, res) -> {
+            res.type("application/json");
+            String id = req.queryParams("slmcNo");
+            String type = "PROFESSIONAL";
+            
+            try {
+                List<RecordRequest> requests = recordSharingDAO.getRecordRequests(id, type);
+                return gson.toJson(requests);
+            } catch (Exception e) {
+                e.printStackTrace();
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", "Failed to fetch record requests"));
+            }
+        });
+
+        get("/api/institute/record-requests", (req, res) -> {
+            res.type("application/json");
+            String id = req.queryParams("instituteId");
+            String type = "INSTITUTE";
+            
+            try {
+                List<RecordRequest> requests = recordSharingDAO.getRecordRequests(id, type);
+                return gson.toJson(requests);
+            } catch (Exception e) {
+                e.printStackTrace();
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", "Failed to fetch record requests"));
+            }
+        });
+
+        post("/api/professional/request-record", (req, res) -> {
+            res.type("application/json");
+            try {
+                JsonObject jsonRequest = JsonParser.parseString(req.body()).getAsJsonObject();
+                
+                RecordRequest request = new RecordRequest();
+                request.setRequesterSlmc(jsonRequest.get("requestingSlmcNo").getAsString());
+                request.setRequesterType("PROFESSIONAL");
+                request.setReceiverType(jsonRequest.has("receiverType") ? 
+                    jsonRequest.get("receiverType").getAsString() : "PROFESSIONAL");
+                request.setPatientPHN(jsonRequest.get("patientPHN").getAsString());
+                request.setRecordType(jsonRequest.get("recordType").getAsString());
+                request.setPurpose(jsonRequest.get("purpose").getAsString());
+                
+                if (request.getReceiverType().equals("PROFESSIONAL")) {
+                    request.setReceiverSlmc(jsonRequest.get("providerName").getAsString());
+                } else {
+                    request.setReceiverInstituteId(jsonRequest.get("providerName").getAsString());
+                }
+
+                boolean success = recordSharingDAO.createRecordRequest(request);
+                
+                if (success) {
+                    return gson.toJson(new ApiResponse("success", "Record request created successfully"));
+                } else {
+                    res.status(500);
+                    return gson.toJson(new ApiResponse("error", "Failed to create record request"));
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", "Server error: " + e.getMessage()));
+            }
+        });
+
+        post("/api/institute/request-record", (req, res) -> {
+            res.type("application/json");
+            try {
+                JsonObject jsonRequest = JsonParser.parseString(req.body()).getAsJsonObject();
+                
+                RecordRequest request = new RecordRequest();
+                request.setRequesterInstituteId(jsonRequest.get("requestingInstituteId").getAsString());
+                request.setRequesterType("INSTITUTE");
+                request.setReceiverType(jsonRequest.has("receiverType") ? 
+                    jsonRequest.get("receiverType").getAsString() : "PROFESSIONAL");
+                request.setPatientPHN(jsonRequest.get("patientPHN").getAsString());
+                request.setRecordType(jsonRequest.get("recordType").getAsString());
+                request.setPurpose(jsonRequest.get("purpose").getAsString());
+                
+                if (request.getReceiverType().equals("PROFESSIONAL")) {
+                    request.setReceiverSlmc(jsonRequest.get("providerName").getAsString());
+                } else {
+                    request.setReceiverInstituteId(jsonRequest.get("providerName").getAsString());
+                }
+
+                boolean success = recordSharingDAO.createRecordRequest(request);
+                
+                if (success) {
+                    return gson.toJson(new ApiResponse("success", "Record request created successfully"));
+                } else {
+                    res.status(500);
+                    return gson.toJson(new ApiResponse("error", "Failed to create record request"));
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", "Server error: " + e.getMessage()));
+            }
+        });
+
+        post("/api/professional/send-record", (req, res) -> {
+            res.type("application/json");
+            try {
+                req.attribute("org.eclipse.jetty.multipartConfig", new MultipartConfigElement("/temp"));
+                
+                RecordSharing record = new RecordSharing();
+                record.setSenderType("PROFESSIONAL");
+                record.setSenderSlmc(req.raw().getParameter("senderSlmcNo"));
+                record.setReceiverType(req.raw().getParameter("receiverType"));
+                
+                if (record.getReceiverType().equals("PROFESSIONAL")) {
+                    record.setReceiverSlmc(req.raw().getParameter("providerName"));
+                } else {
+                    record.setReceiverInstituteId(req.raw().getParameter("providerName"));
+                }
+                
+                record.setPatientPHN(req.raw().getParameter("patientPHN"));
+                record.setRecordType(req.raw().getParameter("recordType"));
+                record.setSubType(req.raw().getParameter("notes"));
+                
+                // Handle file upload
+                Part filePart = req.raw().getPart("file");
+                String fileName = Paths.get(filePart.getSubmittedFileName()).getFileName().toString();
+                String filePath = UPLOAD_DIR + "/" + System.currentTimeMillis() + "_" + fileName;
+                
+                try (InputStream input = filePart.getInputStream()) {
+                    Files.copy(input, Paths.get(filePath), StandardCopyOption.REPLACE_EXISTING);
+                }
+                
+                record.setFilePath(filePath);
+                record.setStatus("shared");
+                
+                boolean success = recordSharingDAO.shareRecord(record);
+                
+                if (success) {
+                    return gson.toJson(new ApiResponse("success", "Record shared successfully"));
+                } else {
+                    res.status(500);
+                    return gson.toJson(new ApiResponse("error", "Failed to share record"));
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", "Server error: " + e.getMessage()));
+            }
+        });
+
+        post("/api/institute/send-record", (req, res) -> {
+            res.type("application/json");
+            try {
+                req.attribute("org.eclipse.jetty.multipartConfig", new MultipartConfigElement("/temp"));
+                
+                RecordSharing record = new RecordSharing();
+                record.setSenderType("INSTITUTE");
+                record.setSenderInstituteId(req.raw().getParameter("senderInstituteId"));
+                record.setReceiverType(req.raw().getParameter("receiverType"));
+                
+                if (record.getReceiverType().equals("PROFESSIONAL")) {
+                    record.setReceiverSlmc(req.raw().getParameter("providerName"));
+                } else {
+                    record.setReceiverInstituteId(req.raw().getParameter("providerName"));
+                }
+                
+                record.setPatientPHN(req.raw().getParameter("patientPHN"));
+                record.setRecordType(req.raw().getParameter("recordType"));
+                record.setSubType(req.raw().getParameter("notes"));
+                
+                // Handle file upload
+                Part filePart = req.raw().getPart("file");
+                String fileName = Paths.get(filePart.getSubmittedFileName()).getFileName().toString();
+                String filePath = UPLOAD_DIR + "/" + System.currentTimeMillis() + "_" + fileName;
+                
+                try (InputStream input = filePart.getInputStream()) {
+                    Files.copy(input, Paths.get(filePath), StandardCopyOption.REPLACE_EXISTING);
+                }
+                
+                record.setFilePath(filePath);
+                record.setStatus("shared");
+                
+                boolean success = recordSharingDAO.shareRecord(record);
+                
+                if (success) {
+                    return gson.toJson(new ApiResponse("success", "Record shared successfully"));
+                } else {
+                    res.status(500);
+                    return gson.toJson(new ApiResponse("error", "Failed to share record"));
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", "Server error: " + e.getMessage()));
+            }
+        });
+
+        get("/api/professional/appointments", (req, res) -> {
+            res.type("application/json");
+            String slmcNo = req.queryParams("slmcNo");
+            
+            try {
+                if (slmcNo == null || slmcNo.isEmpty()) {
+                    res.status(400);
+                    return gson.toJson(new ApiResponse("error", "SLMC number is required"));
+                }
+
+                AppointmentDAO appointmentDAO = new AppointmentDAO(connHolder[0]);
+                Vector<Appointment> appointments = appointmentDAO.getAppointmentsByProfessional(slmcNo);
+                return gson.toJson(appointments);
+            } catch (Exception e) {
+                e.printStackTrace();
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", "Failed to fetch appointments"));
+            }
+        });
+
+        get("/api/professional/appointment-requests", (req, res) -> {
+            res.type("application/json");
+            String slmcNo = req.queryParams("slmcNo");
+            
+            try {
+                if (slmcNo == null || slmcNo.isEmpty()) {
+                    res.status(400);
+                    return gson.toJson(new ApiResponse("error", "SLMC number is required"));
+                }
+
+                AppointmentDAO appointmentDAO = new AppointmentDAO(connHolder[0]);
+                Vector<Appointment> requests = appointmentDAO.getPendingAppointments(slmcNo);
+                return gson.toJson(requests);
+            } catch (Exception e) {
+                e.printStackTrace();
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", "Failed to fetch appointment requests"));
+            }
+        });
+
+        post("/api/professional/appointments", (req, res) -> {
+            res.type("application/json");
+            try {
+                JsonObject jsonRequest = JsonParser.parseString(req.body()).getAsJsonObject();
+                Appointment appointment = new Appointment();
+                
+                appointment.setSlmcNo(jsonRequest.get("slmcNo").getAsString());
+                appointment.setPersonalHealthNo(jsonRequest.get("patientPHN").getAsString());
+                appointment.setAppointmentDate(java.sql.Date.valueOf(jsonRequest.get("appointmentDate").getAsString()));
+                appointment.setAppointmentTime(java.sql.Time.valueOf(jsonRequest.get("appointmentTime").getAsString() + ":00"));
+                appointment.setPurpose(jsonRequest.get("purpose").getAsString());
+                appointment.setStatus("Scheduled");
+                appointment.setNotes(jsonRequest.has("notes") ? jsonRequest.get("notes").getAsString() : "");
+
+                AppointmentDAO appointmentDAO = new AppointmentDAO(connHolder[0]);
+                appointmentDAO.insertAppointment(appointment);
+                
+                return gson.toJson(new ApiResponse("success", "Appointment created successfully"));
+            } catch (Exception e) {
+                e.printStackTrace();
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", "Failed to create appointment: " + e.getMessage()));
+            }
+        });
+
+        put("/api/professional/appointments/:id", (req, res) -> {
+            res.type("application/json");
+            try {
+                int appointmentId = Integer.parseInt(req.params(":id"));
+                JsonObject jsonRequest = JsonParser.parseString(req.body()).getAsJsonObject();
+                
+                Appointment appointment = new Appointment();
+                appointment.setAppointmentID(appointmentId);
+                appointment.setSlmcNo(jsonRequest.get("slmcNo").getAsString());
+                appointment.setPersonalHealthNo(jsonRequest.get("patientPHN").getAsString());
+                appointment.setAppointmentDate(java.sql.Date.valueOf(jsonRequest.get("appointmentDate").getAsString()));
+                appointment.setAppointmentTime(java.sql.Time.valueOf(jsonRequest.get("appointmentTime").getAsString() + ":00"));
+                appointment.setPurpose(jsonRequest.get("purpose").getAsString());
+                appointment.setStatus(jsonRequest.get("status").getAsString());
+                appointment.setNotes(jsonRequest.has("notes") ? jsonRequest.get("notes").getAsString() : "");
+
+                AppointmentDAO appointmentDAO = new AppointmentDAO(connHolder[0]);
+                appointmentDAO.updateAppointment(appointment);
+                
+                return gson.toJson(new ApiResponse("success", "Appointment updated successfully"));
+            } catch (Exception e) {
+                e.printStackTrace();
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", "Failed to update appointment: " + e.getMessage()));
+            }
+        });
+
+        put("/api/professional/appointment-requests/:id/status", (req, res) -> {
+            res.type("application/json");
+            try {
+                int appointmentId = Integer.parseInt(req.params(":id"));
+                JsonObject jsonRequest = JsonParser.parseString(req.body()).getAsJsonObject();
+                String status = jsonRequest.get("status").getAsString();
+                
+                AppointmentDAO appointmentDAO = new AppointmentDAO(connHolder[0]);
+                Appointment appointment = appointmentDAO.getAppointmentById(appointmentId);
+                
+                if (appointment != null) {
+                    appointment.setStatus(status);
+                    appointmentDAO.updateAppointment(appointment);
+                    return gson.toJson(new ApiResponse("success", "Appointment status updated successfully"));
+                } else {
+                    res.status(404);
+                    return gson.toJson(new ApiResponse("error", "Appointment not found"));
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", "Failed to update appointment status: " + e.getMessage()));
             }
         });
     }

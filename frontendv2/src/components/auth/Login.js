@@ -42,17 +42,19 @@ function Login() {
     };
 
     const handleRegisterClick = () => {
+        console.log('Register clicked for portal type:', formData.portalType);
         switch(formData.portalType) {
             case 'patient':
                 setShowPatientModal(true);
                 break;
-            case 'healthcare_professional':
+            case 'professional':
                 setShowProfessionalModal(true);
                 break;
-            case 'healthcare_institute':
+            case 'institute':
                 setShowInstituteModal(true);
                 break;
             default:
+                console.log('Unknown portal type:', formData.portalType);
                 break;
         }
     };

@@ -429,26 +429,51 @@ public class Main {
 
                     case "institute":
                         try {
+                            // Create new healthcare institute object
                             HealthcareInstitute newInstitute = new HealthcareInstitute(
+                                jsonBody.get("instituteNumber").getAsString(),
                                 jsonBody.get("instituteName").getAsString(),
                                 jsonBody.get("address").getAsString(),
-                                jsonBody.get("instituteType").getAsString(),
                                 jsonBody.get("email").getAsString(),
                                 jsonBody.get("contactNo").getAsString(),
-                                null  // healthInstituteNumber - this will be generated
+                                jsonBody.get("instituteType").getAsString()
                             );
                             
+                            // Insert institute first
                             HealthcareInstituteDAO instituteDAO = new HealthcareInstituteDAO(connHolder[0]);
                             instituteDAO.insertHealthcareInstitute(newInstitute);
                             identifier = newInstitute.getHealthInstituteNumber();
                             
+                            // Create login credentials using the SAME connection
+                            Login2FA login2FA = new Login2FA();
+                            login2FA.setUserIdentifier(identifier);
+                            login2FA.setUserType("institute");
+                            login2FA.setLoginUsername(identifier);
+                            login2FA.setLoginPassword(jsonBody.get("password").getAsString());
+                            login2FA.setTwoFAPreference(jsonBody.get("twoFAPreference").getAsString());
+                            login2FA.setPortalType("institute");
+                            login2FA.setLastTwoFACode(generateSecret());
+                            
+                            // Use the SAME connection for login creation
+                            Login2FADAO login2FADao = new Login2FADAO(connHolder[0]);
+                            boolean loginCreated = login2FADao.signup(login2FA, "institute");
+                            
+                            if (!loginCreated) {
+                                // If login creation fails, rollback institute creation
+                                instituteDAO.deleteHealthcareInstitute(identifier);
+                                throw new Exception("Failed to create login credentials");
+                            }
+                            
+                            // Only close connection after BOTH operations are complete
+                            instituteDAO.closeConnection();
+                            
                             return gson.toJson(new ApiResponse("success", 
-                                "Healthcare Institute registration successful. Your Institute Number is: " + identifier, 
+                                "Institute registration successful. Your Institute Number is: " + identifier,
                                 identifier));
                         } catch (Exception e) {
                             if (e.getMessage().contains("UNIQUE constraint failed")) {
                                 return gson.toJson(new ApiResponse("error", 
-                                    "This institute is already registered. Please try logging in instead."));
+                                    "This Institute Number is already registered. Please try logging in instead."));
                             }
                             throw e;
                         }
@@ -1021,7 +1046,7 @@ public class Main {
                 appointment.setPurpose(jsonRequest.get("purpose").getAsString());
                 appointment.setStatus(jsonRequest.get("status").getAsString());
                 appointment.setNotes(jsonRequest.has("notes") ? jsonRequest.get("notes").getAsString() : "");
-                
+
                 AppointmentDAO appointmentDAO = new AppointmentDAO(connHolder[0]);
                 appointmentDAO.updateAppointment(appointment);
                 

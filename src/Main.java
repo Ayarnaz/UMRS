@@ -1707,6 +1707,418 @@ public class Main {
                 return gson.toJson(new ApiResponse("error", "Failed to update appointment status: " + e.getMessage()));
             }
         });
+
+        // Add these endpoints after your existing routes
+        get("/api/institute/dashboard", (req, res) -> {
+            res.type("application/json");
+            Connection conn = null;
+            try {
+                String instituteNumber = req.queryParams("instituteNumber");
+                if (instituteNumber == null || instituteNumber.isEmpty()) {
+                    res.status(400);
+                    return gson.toJson(new ApiResponse("error", "Institute Number is required"));
+                }
+
+                conn = getConnection();
+                Map<String, Object> dashboardData = new HashMap<>();
+
+                // Get basic institute info
+                try (PreparedStatement pstmt = conn.prepareStatement(
+                        "SELECT * FROM Healthcare_Institute WHERE Health_Institute_Number = ?")) {
+                    pstmt.setString(1, instituteNumber);
+                    ResultSet rs = pstmt.executeQuery();
+                    if (rs.next()) {
+                        Map<String, Object> institute = new HashMap<>();
+                        institute.put("instituteNumber", rs.getString("Health_Institute_Number")); // Add this line
+                        institute.put("name", rs.getString("Name"));
+                        institute.put("type", rs.getString("Type"));
+                        dashboardData.put("institute", institute);
+                    } else {
+                        res.status(404);
+                        return gson.toJson(new ApiResponse("error", "Institute not found"));
+                    }
+                }
+
+                // Get counts directly with simple queries
+                Map<String, Object> stats = new HashMap<>();
+                
+                // Count professionals
+                try (PreparedStatement pstmt = conn.prepareStatement(
+                        "SELECT COUNT(*) FROM Healthcare_Professional WHERE Health_Institute_Number = ?")) {
+                    pstmt.setString(1, instituteNumber);
+                    ResultSet rs = pstmt.executeQuery();
+                    stats.put("activeProfessionals", rs.next() ? rs.getInt(1) : 0);
+                }
+
+                // Count today's appointments
+                try (PreparedStatement pstmt = conn.prepareStatement(
+                        "SELECT COUNT(*) FROM Appointment WHERE Health_Institute_Number = ? AND Appointment_Date = DATE('now')")) {
+                    pstmt.setString(1, instituteNumber);
+                    ResultSet rs = pstmt.executeQuery();
+                    stats.put("todayAppointments", rs.next() ? rs.getInt(1) : 0);
+                }
+
+                // Count medical records
+                try (PreparedStatement pstmt = conn.prepareStatement(
+                        "SELECT COUNT(*) FROM Medical_Record WHERE Health_Institute_Number = ?")) {
+                    pstmt.setString(1, instituteNumber);
+                    ResultSet rs = pstmt.executeQuery();
+                    stats.put("pendingReports", rs.next() ? rs.getInt(1) : 0);
+                }
+
+                dashboardData.put("stats", stats);
+                return gson.toJson(dashboardData);
+
+            } catch (Exception e) {
+                e.printStackTrace();
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", e.getMessage()));
+            } finally {
+                if (conn != null) {
+                    try {
+                        conn.close();
+                    } catch (SQLException e) {
+                        System.err.println("Error closing connection: " + e.getMessage());
+                    }
+                }
+            }
+        });
+
+        // Get institute professionals
+        get("/api/institute/professionals", (req, res) -> {
+            res.type("application/json");
+            String instituteNumber = req.queryParams("instituteNumber");
+            
+            try {
+                if (instituteNumber == null || instituteNumber.isEmpty()) {
+                    res.status(400);
+                    return gson.toJson(new ApiResponse("error", "Institute number is required"));
+                }
+
+                InstituteStaffDAO staffDAO = new InstituteStaffDAO(connHolder[0]);
+                List<Map<String, Object>> professionals = staffDAO.getInstituteProfessionals(instituteNumber);
+                return gson.toJson(professionals);
+            } catch (Exception e) {
+                e.printStackTrace();
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", "Failed to fetch professionals"));
+            }
+        });
+
+        // Add professional to institute
+        post("/api/institute/professionals", (req, res) -> {
+            res.type("application/json");
+            try {
+                JsonObject jsonRequest = JsonParser.parseString(req.body()).getAsJsonObject();
+                String instituteNumber = jsonRequest.get("instituteNumber").getAsString();
+                String slmcNo = jsonRequest.get("slmcNo").getAsString();
+
+                InstituteStaffDAO staffDAO = new InstituteStaffDAO(connHolder[0]);
+                boolean success = staffDAO.addProfessional(instituteNumber, slmcNo);
+
+                if (success) {
+                    return gson.toJson(new ApiResponse("success", "Professional added successfully"));
+                } else {
+                    res.status(400);
+                    return gson.toJson(new ApiResponse("error", "Professional not found or already associated"));
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", "Server error: " + e.getMessage()));
+            }
+        });
+
+        // Update professional status
+        put("/api/institute/professionals/:slmcNo", (req, res) -> {
+            res.type("application/json");
+            try {
+                String slmcNo = req.params(":slmcNo");
+                JsonObject jsonRequest = JsonParser.parseString(req.body()).getAsJsonObject();
+                String instituteNumber = jsonRequest.get("instituteNumber").getAsString();
+                String status = jsonRequest.get("status").getAsString();
+
+                InstituteStaffDAO staffDAO = new InstituteStaffDAO(connHolder[0]);
+                boolean success = staffDAO.updateProfessionalStatus(instituteNumber, slmcNo, status);
+
+                if (success) {
+                    return gson.toJson(new ApiResponse("success", "Professional status updated"));
+                } else {
+                    res.status(404);
+                    return gson.toJson(new ApiResponse("error", "Professional not found"));
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", "Server error: " + e.getMessage()));
+            }
+        });
+
+        // Get professional details by SLMC number
+        get("/api/professional/details/:slmcNo", (req, res) -> {
+            res.type("application/json");
+            String slmcNo = req.params(":slmcNo");
+            
+            try {
+                String sql = "SELECT SLMC_No, Name, Specialty, Role FROM Healthcare_Professional WHERE SLMC_No = ?";
+                try (Connection conn = getConnection();
+                     PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                    
+                    pstmt.setString(1, slmcNo);
+                    ResultSet rs = pstmt.executeQuery();
+                    
+                    if (rs.next()) {
+                        Map<String, Object> professional = new HashMap<>();
+                        professional.put("slmcNo", rs.getString("SLMC_No"));
+                        professional.put("name", rs.getString("Name"));
+                        professional.put("specialty", rs.getString("Specialty"));
+                        professional.put("role", rs.getString("Role"));
+                        return gson.toJson(professional);
+                    } else {
+                        res.status(404);
+                        return gson.toJson(new ApiResponse("error", "Professional not found"));
+                    }
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", "Server error: " + e.getMessage()));
+            }
+        });
+
+        // Update the institute medical records endpoint
+        get("/api/institute/medical-records", (req, res) -> {
+            res.type("application/json");
+            String instituteId = req.queryParams("instituteId");
+            
+            try {
+                if (instituteId == null || instituteId.isEmpty()) {
+                    res.status(400);
+                    return gson.toJson(new ApiResponse("error", "Institute ID is required"));
+                }
+
+                MedicalRecordDAO recordDAO = new MedicalRecordDAO(connHolder[0]);
+                List<MedicalRecord> records = recordDAO.getRecordsByInstitute(instituteId);
+                
+                // Transform records to match frontend expectations
+                List<Map<String, Object>> responseRecords = records.stream()
+                    .map(record -> {
+                        Map<String, Object> map = new HashMap<>();
+                        map.put("recordId", record.getRecordId());
+                        map.put("patientPHN", record.getPersonalHealthNo());
+                        map.put("type", record.getType());
+                        map.put("summary", record.getSummary());
+                        map.put("dateOfVisit", record.getDateOfVisit().toString());
+                        map.put("diagnosis", record.getDiagnosis());
+                        map.put("treatment", record.getTreatment());
+                        map.put("notes", record.getNotes());
+                        return map;
+                    })
+                    .collect(java.util.stream.Collectors.toList());
+
+                return gson.toJson(responseRecords);
+            } catch (Exception e) {
+                e.printStackTrace();
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", "Failed to fetch medical records: " + e.getMessage()));
+            }
+        });
+
+        // Add this endpoint for downloading records
+        get("/api/institute/medical-records/download/:recordId", (req, res) -> {
+            String recordId = req.params(":recordId");
+            // Implement file download logic here
+            // This will depend on how you're storing files in your system
+            return "File download implementation needed";
+        });
+
+        // Add this endpoint for institute records data
+        get("/api/institute/records-data", (req, res) -> {
+            res.type("application/json");
+            String instituteId = req.queryParams("instituteId");
+            System.out.println("Received records-data request for Institute: " + instituteId);
+            
+            try (Connection conn = getConnection()) {
+                Map<String, List<Map<String, Object>>> result = new HashMap<>();
+                
+                // Get accessed records (just like professional's implementation)
+                String accessedRecordsSQL = """
+                    SELECT DISTINCT 
+                        mr.Record_ID as id,
+                        mr.Personal_Health_No as personalHealthNo,
+                        p.Name as patientName,
+                        COALESCE(rar.Purpose, 'Medical Record') as purpose,
+                        COALESCE(rar.Status, 'approved') as status,
+                        COALESCE(rar.Request_Date, mr.Date_of_Visit) as requestDate
+                    FROM Record_Access_Requests rar
+                    JOIN Patient p ON rar.Personal_Health_No = p.Personal_Health_No
+                    LEFT JOIN Medical_Record mr ON rar.Personal_Health_No = mr.Personal_Health_No
+                    WHERE rar.Institute_No = ?
+                    ORDER BY rar.Request_Date DESC
+                """;
+
+                List<Map<String, Object>> accessedRecords = new ArrayList<>();
+                try (PreparedStatement pstmt = conn.prepareStatement(accessedRecordsSQL)) {
+                    pstmt.setString(1, instituteId);
+                    ResultSet rs = pstmt.executeQuery();
+                    
+                    while (rs.next()) {
+                        Map<String, Object> record = new HashMap<>();
+                        record.put("id", rs.getInt("id"));
+                        record.put("personalHealthNo", rs.getString("personalHealthNo"));
+                        record.put("patientName", rs.getString("patientName"));
+                        record.put("purpose", rs.getString("purpose"));
+                        record.put("status", rs.getString("status"));
+                        
+                        // Format date to match professional's implementation
+                        Timestamp requestDate = rs.getTimestamp("requestDate");
+                        if (requestDate != null) {
+                            record.put("requestDate", new SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
+                                .format(requestDate));
+                        }
+                        
+                        accessedRecords.add(record);
+                    }
+                }
+
+                // Debug logging
+                System.out.println("Fetched " + accessedRecords.size() + " accessed records for institute " + instituteId);
+                
+                result.put("accessedRecords", accessedRecords);
+                result.put("medicalRecords", new ArrayList<>()); // Empty list as in professional's implementation
+                
+                return gson.toJson(result);
+
+            } catch (Exception e) {
+                e.printStackTrace();
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", "Failed to fetch records: " + e.getMessage()));
+            }
+        });
+
+        // Add patient lookup endpoint
+        get("/api/institute/patient-lookup", (req, res) -> {
+            res.type("application/json");
+            String searchTerm = req.queryParams("search");
+            
+            if (searchTerm == null || searchTerm.isEmpty()) {
+                res.status(400);
+                return gson.toJson(new ApiResponse("error", "Search term is required"));
+            }
+
+            try (Connection conn = getConnection()) {
+                String sql = "SELECT Personal_Health_No, Name FROM PATIENT WHERE Personal_Health_No = ?";
+                
+                try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                    pstmt.setString(1, searchTerm);
+                    ResultSet rs = pstmt.executeQuery();
+                    
+                    if (rs.next()) {
+                        Map<String, String> patient = new HashMap<>();
+                        patient.put("personalHealthNo", rs.getString("Personal_Health_No"));
+                        patient.put("name", rs.getString("Name"));
+                        return gson.toJson(patient);
+                    } else {
+                        res.status(404);
+                        return gson.toJson(new ApiResponse("error", "Patient not found"));
+                    }
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", "Database error: " + e.getMessage()));
+            }
+        });
+
+        // Add request access endpoint for institutes
+        post("/api/institute/request-access", (req, res) -> {
+            res.type("application/json");
+            String body = req.body();
+            JsonObject requestData = JsonParser.parseString(body).getAsJsonObject();
+
+            String personalHealthNo = requestData.get("personalHealthNo").getAsString();
+            String instituteId = requestData.get("instituteId").getAsString();
+            String purpose = requestData.get("purpose").getAsString();
+            boolean isEmergency = requestData.get("isEmergency").getAsBoolean();
+
+            try (Connection conn = getConnection()) {
+                String sql = "INSERT INTO Record_Access_Requests " +
+                            "(Personal_Health_No, Institute_No, Purpose, Is_Emergency, Status) " +
+                            "VALUES (?, ?, ?, ?, ?)";
+                
+                try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                    pstmt.setString(1, personalHealthNo);
+                    pstmt.setString(2, instituteId);
+                    pstmt.setString(3, purpose);
+                    pstmt.setBoolean(4, isEmergency);
+                    pstmt.setString(5, isEmergency ? "approved" : "pending");
+                    
+                    int affectedRows = pstmt.executeUpdate();
+                    
+                    if (affectedRows > 0) {
+                        return gson.toJson(new ApiResponse("success", 
+                            isEmergency ? "Emergency access granted" : "Access request submitted successfully"));
+                    } else {
+                        res.status(500);
+                        return gson.toJson(new ApiResponse("error", "Failed to submit request"));
+                    }
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", "Database error: " + e.getMessage()));
+            }
+        });
+
+        // Add shared records endpoint for institutes
+        get("/api/institute/shared-records", (req, res) -> {
+            res.type("application/json");
+            String instituteId = req.queryParams("instituteId");
+            
+            if (instituteId == null || instituteId.isEmpty()) {
+                res.status(400);
+                return gson.toJson(new ApiResponse("error", "Institute ID is required"));
+            }
+
+            try (Connection conn = getConnection()) {
+                String sql = 
+                    "SELECT sr.*, mr.*, p.Name as patientName " +
+                    "FROM Shared_Records sr " +
+                    "JOIN Medical_Record mr ON sr.record_id = mr.Record_ID " +
+                    "JOIN PATIENT p ON mr.Personal_Health_No = p.Personal_Health_No " +
+                    "WHERE sr.receiver_institute_id = ? " +
+                    "AND sr.receiver_type = 'INSTITUTE' " +
+                    "ORDER BY sr.share_date DESC";
+
+                List<Map<String, Object>> sharedRecords = new ArrayList<>();
+                try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                    pstmt.setString(1, instituteId);
+                    ResultSet rs = pstmt.executeQuery();
+                    
+                    while (rs.next()) {
+                        Map<String, Object> record = new HashMap<>();
+                        record.put("recordId", rs.getInt("record_id"));
+                        record.put("personalHealthNo", rs.getString("Personal_Health_No"));
+                        record.put("patientName", rs.getString("patientName"));
+                        record.put("type", rs.getString("record_type"));
+                        record.put("dateOfVisit", rs.getString("Date_of_Visit"));
+                        record.put("diagnosis", rs.getString("Diagnosis"));
+                        record.put("treatment", rs.getString("Treatment"));
+                        record.put("notes", rs.getString("Notes"));
+                        record.put("shareDate", rs.getTimestamp("share_date").toString());
+                        record.put("status", rs.getString("status"));
+                        sharedRecords.add(record);
+                    }
+                }
+                
+                return gson.toJson(sharedRecords);
+            } catch (Exception e) {
+                e.printStackTrace();
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", "Failed to fetch shared records: " + e.getMessage()));
+            }
+        });
+
     }
 
     // Move this method outside of main

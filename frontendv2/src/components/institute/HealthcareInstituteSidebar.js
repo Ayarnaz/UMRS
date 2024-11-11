@@ -5,6 +5,7 @@ import {
     Building2,
     Users,
     FileText,
+    Calendar,
     ClipboardList,
     Settings,
     LogOut,
@@ -30,6 +31,11 @@ function HealthcareInstituteSidebar() {
             path: '/institute/records'
         },
         {
+            name: 'Appointments',
+            icon: Calendar,
+            path: '/institute/appointments'
+        },
+        {
             name: 'Healthcare Professionals',
             icon: Users,
             path: '/institute/professionals'
@@ -38,8 +44,9 @@ function HealthcareInstituteSidebar() {
             name: 'Share Records',
             icon: Share2,
             path: '/institute/share-records'
-        },
-        {
+        }
+        // Commented out features that aren't implemented yet
+        /*{
             name: 'Reports',
             icon: ClipboardList,
             path: '/institute/reports'
@@ -53,7 +60,7 @@ function HealthcareInstituteSidebar() {
             name: 'Analytics',
             icon: Activity,
             path: '/institute/analytics'
-        }
+        }*/
     ];
 
     const handleLogout = async () => {
@@ -69,7 +76,8 @@ function HealthcareInstituteSidebar() {
         <div className="w-64 bg-white h-screen flex flex-col border-r border-gray-200">
             {/* Logo/Header */}
             <div className="p-6 border-b border-gray-200">
-                <h1 className="text-xl font-bold text-gray-800">UMRS Institute</h1>
+                <h1 className="text-xl font-bold text-gray-800">UMRS</h1>
+                <p className="text-sm text-gray-600">Healthcare Institute Portal</p>
             </div>
 
             {/* Navigation Menu */}

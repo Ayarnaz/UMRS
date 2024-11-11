@@ -2,8 +2,18 @@ import api from './api';
 
 export const getInstituteDashboard = async (instituteNumber) => {
     try {
-        const response = await api.get(`/api/institute/dashboard?instituteNumber=${instituteNumber}`);
-        return response.data;
+        const [dashboardResponse, statsResponse] = await Promise.all([
+            api.get(`/api/institute/dashboard?instituteNumber=${instituteNumber}`),
+            api.get(`/api/institute/dashboard-stats?instituteId=${instituteNumber}`)
+        ]);
+
+        return {
+            ...dashboardResponse.data,
+            stats: {
+                ...dashboardResponse.data.stats,
+                todayAppointments: statsResponse.data.todayCount
+            }
+        };
     } catch (error) {
         console.error('Error fetching institute dashboard:', error);
         throw error;

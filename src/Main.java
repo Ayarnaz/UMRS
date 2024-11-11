@@ -28,7 +28,7 @@ import java.util.HashMap;
 import com.google.gson.stream.JsonReader;
 import java.io.StringReader;
 import java.util.Vector;
-import static spark.Spark.staticFiles;
+
 import javax.servlet.MultipartConfigElement;
 import javax.servlet.ServletException;
 import java.nio.file.Files;
@@ -40,6 +40,7 @@ import java.util.Random;
 import java.util.Base64;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
+import java.util.TimeZone;
 
 //>>>>> javac --enable-preview --release 23 -cp "lib/*" -d bin src/*.java
 //>>>>> java --enable-preview -cp "bin;lib/*" Main 
@@ -2116,6 +2117,265 @@ public class Main {
                 e.printStackTrace();
                 res.status(500);
                 return gson.toJson(new ApiResponse("error", "Failed to fetch shared records: " + e.getMessage()));
+            }
+        });
+
+        // Add these appointment endpoints after your existing routes
+        get("/api/institute/appointments", (req, res) -> {
+            res.type("application/json");
+            String instituteId = req.queryParams("instituteId");
+            String status = req.queryParams("status");
+            String search = req.queryParams("search");
+            
+            System.out.println("Fetching appointments for institute: " + instituteId);
+            
+            try {
+                Map<String, Object> response = new HashMap<>();
+                AppointmentDAO appointmentDAO = new AppointmentDAO(connHolder[0]);
+
+                // Get appointments with joined data
+                String sql = """
+                    SELECT 
+                        a.*,
+                        p.Name as patient_name,
+                        hp.Name as professional_name,
+                        a.Appointment_Date,
+                        a.Appointment_Time,
+                        datetime(a.Appointment_Date || ' ' || a.Appointment_Time) as appointment_datetime
+                    FROM Appointment a
+                    JOIN Patient p ON a.Personal_Health_No = p.Personal_Health_No
+                    JOIN Healthcare_Professional hp ON a.SLMC_No = hp.SLMC_No
+                    WHERE a.Health_Institute_Number = ?
+                """;
+
+                if (status != null && !status.equals("all")) {
+                    sql += " AND a.Status = ?";
+                }
+                if (search != null && !search.isEmpty()) {
+                    sql += " AND (p.Name LIKE ? OR hp.Name LIKE ? OR a.Purpose LIKE ?)";
+                }
+                sql += " ORDER BY a.Appointment_Date DESC, a.Appointment_Time DESC";
+
+                List<Map<String, Object>> appointments = new ArrayList<>();
+                try (PreparedStatement pstmt = connHolder[0].prepareStatement(sql)) {
+                    int paramIndex = 1;
+                    pstmt.setString(paramIndex++, instituteId);
+                    
+                    if (status != null && !status.equals("all")) {
+                        pstmt.setString(paramIndex++, status);
+                    }
+                    if (search != null && !search.isEmpty()) {
+                        String searchPattern = "%" + search + "%";
+                        pstmt.setString(paramIndex++, searchPattern);
+                        pstmt.setString(paramIndex++, searchPattern);
+                        pstmt.setString(paramIndex++, searchPattern);
+                    }
+
+                    ResultSet rs = pstmt.executeQuery();
+                    while (rs.next()) {
+                        Map<String, Object> appointment = new HashMap<>();
+                        appointment.put("id", rs.getInt("Appointment_ID"));
+                        appointment.put("patientPHN", rs.getString("Personal_Health_No"));
+                        appointment.put("patientName", rs.getString("patient_name"));
+                        appointment.put("professionalId", rs.getString("SLMC_No"));
+                        appointment.put("professionalName", rs.getString("professional_name"));
+                        appointment.put("purpose", rs.getString("Purpose"));
+                        appointment.put("status", rs.getString("Status"));
+                        
+                        // Format the date and time properly
+                        java.sql.Date appointmentDate = rs.getDate("Appointment_Date");
+                        java.sql.Time appointmentTime = rs.getTime("Appointment_Time");
+                        
+                        if (appointmentDate != null && appointmentTime != null) {
+                            // Format as ISO string
+                            SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'");
+                            sdf.setTimeZone(TimeZone.getTimeZone("UTC"));
+                            java.util.Date combinedDate = new java.util.Date(
+                                appointmentDate.getTime() + appointmentTime.getTime() % (24*60*60*1000)
+                            );
+                            appointment.put("dateTime", sdf.format(combinedDate));
+                        }
+                        
+                        appointments.add(appointment);
+                        System.out.println("Appointment datetime: " + appointment.get("dateTime"));
+                    }
+                }
+
+                response.put("appointments", appointments);
+                response.put("todayCount", appointmentDAO.getTodayAppointmentsCount(instituteId));
+                
+                return gson.toJson(response);
+            } catch (Exception e) {
+                e.printStackTrace();
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", "Failed to fetch appointments: " + e.getMessage()));
+            }
+        });
+
+        post("/api/institute/appointments", (req, res) -> {
+        res.type("application/json");
+        try {
+            JsonObject jsonRequest = JsonParser.parseString(req.body()).getAsJsonObject();
+            System.out.println("Received appointment request: " + jsonRequest);
+
+            // Create new appointment
+            Appointment appointment = new Appointment();
+            appointment.setHealthInstituteNumber(jsonRequest.get("instituteId").getAsString());
+            appointment.setPersonalHealthNo(jsonRequest.get("patientPHN").getAsString());
+            appointment.setSlmcNo(jsonRequest.get("professionalId").getAsString());
+            appointment.setPurpose(jsonRequest.get("purpose").getAsString());
+            
+            // Format the datetime string properly
+            String dateTimeStr = jsonRequest.get("dateTime").getAsString() + ":00";  // Add seconds
+            Timestamp appointmentDateTime = Timestamp.valueOf(dateTimeStr);
+            
+            appointment.setAppointmentDate(new java.sql.Date(appointmentDateTime.getTime()));
+            appointment.setAppointmentTime(new java.sql.Time(appointmentDateTime.getTime()));
+            
+            appointment.setStatus("scheduled");
+            
+            AppointmentDAO appointmentDAO = new AppointmentDAO(connHolder[0]);
+            appointmentDAO.insertAppointment(appointment);
+            
+            return gson.toJson(new ApiResponse("success", "Appointment created successfully"));
+        } catch (Exception e) {
+            e.printStackTrace();
+            res.status(500);
+                return gson.toJson(new ApiResponse("error", "Failed to create appointment: " + e.getMessage()));
+            }
+        });
+
+        put("/api/institute/appointments/:id", (req, res) -> {
+            res.type("application/json");
+            try {
+                int appointmentId = Integer.parseInt(req.params(":id"));
+                JsonObject jsonRequest = JsonParser.parseString(req.body()).getAsJsonObject();
+                
+                AppointmentDAO appointmentDAO = new AppointmentDAO(connHolder[0]);
+                Appointment appointment = appointmentDAO.getAppointmentById(appointmentId);
+                
+                if (appointment == null) {
+                    res.status(404);
+                    return gson.toJson(new ApiResponse("error", "Appointment not found"));
+                }
+                
+                // Update fields if provided
+                if (jsonRequest.has("status")) {
+                    appointment.setStatus(jsonRequest.get("status").getAsString());
+                }
+                if (jsonRequest.has("dateTime")) {
+                    String[] dateTimeParts = jsonRequest.get("dateTime").getAsString().split("T");
+                    appointment.setAppointmentDate(java.sql.Date.valueOf(dateTimeParts[0]));
+                    String timeStr = dateTimeParts[1].split("\\.")[0];
+                    appointment.setAppointmentTime(java.sql.Time.valueOf(timeStr));
+                }
+                if (jsonRequest.has("purpose")) {
+                    appointment.setPurpose(jsonRequest.get("purpose").getAsString());
+                }
+                
+                appointmentDAO.updateAppointment(appointment);
+                return gson.toJson(new ApiResponse("success", "Appointment updated successfully"));
+            } catch (Exception e) {
+                e.printStackTrace();
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", "Failed to update appointment: " + e.getMessage()));
+            }
+        });
+
+        delete("/api/institute/appointments/:id", (req, res) -> {
+            res.type("application/json");
+            try {
+                int appointmentId = Integer.parseInt(req.params(":id"));
+                AppointmentDAO appointmentDAO = new AppointmentDAO(connHolder[0]);
+                appointmentDAO.deleteAppointment(appointmentId);
+                return gson.toJson(new ApiResponse("success", "Appointment deleted successfully"));
+            } catch (Exception e) {
+                e.printStackTrace();
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", "Failed to delete appointment: " + e.getMessage()));
+            }
+        });
+
+        // Add this new endpoint for institute stats
+        get("/api/institute/stats", (req, res) -> {
+            res.type("application/json");
+            try {
+                String instituteId = req.queryParams("instituteId");
+                System.out.println("Fetching stats for institute: " + instituteId);
+                
+                Map<String, Object> stats = new HashMap<>();
+
+                // Get today's appointments count
+                String countSql = """
+                    SELECT COUNT(*) as count 
+                    FROM Appointment 
+                    WHERE Health_Institute_Number = ? 
+                    AND date(Appointment_Date) = date('now')
+                    AND Status != 'cancelled'
+                """;
+
+                try (PreparedStatement countStmt = connHolder[0].prepareStatement(countSql)) {
+                    countStmt.setString(1, instituteId);
+                    ResultSet countRs = countStmt.executeQuery();
+                    stats.put("todayCount", countRs.next() ? countRs.getInt("count") : 0);
+                }
+
+                return gson.toJson(stats);
+            } catch (Exception e) {
+                e.printStackTrace();
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", "Failed to fetch institute stats: " + e.getMessage()));
+            }
+        });
+
+        get("/api/institute/dashboard-stats", (req, res) -> {
+            res.type("application/json");
+            try {
+                String instituteId = req.queryParams("instituteId");
+                System.out.println("Fetching dashboard stats for institute: " + instituteId);
+                
+                Map<String, Object> stats = new HashMap<>();
+
+                // Modified SQL to handle timestamp format
+                String countSql = """
+                    SELECT COUNT(*) as count 
+                    FROM Appointment 
+                    WHERE Health_Institute_Number = ? 
+                    AND datetime(Appointment_Date/1000, 'unixepoch') LIKE '2024-11-12%'
+                    AND Status != 'cancelled'
+                """;
+
+                try (Connection conn = getConnection();
+                     PreparedStatement countStmt = conn.prepareStatement(countSql)) {
+                    countStmt.setString(1, instituteId);
+                    ResultSet countRs = countStmt.executeQuery();
+                    int count = countRs.next() ? countRs.getInt("count") : 0;
+                    stats.put("todayCount", count);
+                    System.out.println("Today's appointment count for institute " + instituteId + ": " + count);
+                    
+                    // Debug query
+                    String debugSql = """
+                        SELECT 
+                            Appointment_Date,
+                            datetime(Appointment_Date/1000, 'unixepoch') as formatted_date
+                        FROM Appointment 
+                        WHERE Health_Institute_Number = ?
+                    """;
+                    try (PreparedStatement debugStmt = conn.prepareStatement(debugSql)) {
+                        debugStmt.setString(1, instituteId);
+                        ResultSet debugRs = debugStmt.executeQuery();
+                        while (debugRs.next()) {
+                            System.out.println("Raw date: " + debugRs.getString("Appointment_Date") + 
+                                             " Formatted: " + debugRs.getString("formatted_date"));
+                        }
+                    }
+                }
+
+                return gson.toJson(stats);
+            } catch (Exception e) {
+                e.printStackTrace();
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", "Failed to fetch dashboard stats: " + e.getMessage()));
             }
         });
 

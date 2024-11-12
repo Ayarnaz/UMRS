@@ -90,4 +90,14 @@ export const getPatientDetails = async () => {
     console.error('Error fetching patient details:', error);
     throw error;
   }
-}; 
+};
+
+export const updatePatientProfile = async (phn, profileData) => {
+  try {
+    const response = await api.put(`/api/patient/profile/${phn}`, profileData);
+    return response.data;
+  } catch (error) {
+    console.error('Error updating patient profile:', error);
+    throw error;
+  }
+};

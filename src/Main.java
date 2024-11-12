@@ -175,10 +175,10 @@ public class Main {
             System.out.println("Received request: " + request.url());
         });
 
-        // Move this BEFORE any other route definitions, right after your CORS setup
+        // This should beBEFORE any other route definitions, right after the CORS setup (Cross-origin resource sharing (CORS))
         // and BEFORE the /api/patient/:id route
 
-        // Add this endpoint for medical records by PHN
+        // endpoint for medical records by PHN
         get("/api/patient/medical-records/by-phn/:personalHealthNo", (req, res) -> {
             System.out.println("\n=== Medical Records Endpoint Hit ===");
             System.out.println("Request path: " + req.pathInfo());
@@ -2296,38 +2296,6 @@ public class Main {
             }
         });
 
-        // Add this new endpoint for institute stats
-        get("/api/institute/stats", (req, res) -> {
-            res.type("application/json");
-            try {
-                String instituteId = req.queryParams("instituteId");
-                System.out.println("Fetching stats for institute: " + instituteId);
-                
-                Map<String, Object> stats = new HashMap<>();
-
-                // Get today's appointments count
-                String countSql = """
-                    SELECT COUNT(*) as count 
-                    FROM Appointment 
-                    WHERE Health_Institute_Number = ? 
-                    AND date(Appointment_Date) = date('now')
-                    AND Status != 'cancelled'
-                """;
-
-                try (PreparedStatement countStmt = connHolder[0].prepareStatement(countSql)) {
-                    countStmt.setString(1, instituteId);
-                    ResultSet countRs = countStmt.executeQuery();
-                    stats.put("todayCount", countRs.next() ? countRs.getInt("count") : 0);
-                }
-
-                return gson.toJson(stats);
-            } catch (Exception e) {
-                e.printStackTrace();
-                res.status(500);
-                return gson.toJson(new ApiResponse("error", "Failed to fetch institute stats: " + e.getMessage()));
-            }
-        });
-
         get("/api/institute/dashboard-stats", (req, res) -> {
             res.type("application/json");
             try {
@@ -2379,14 +2347,54 @@ public class Main {
             }
         });
 
+        // Add this endpoint after other patient-related endpoints
+        put("/api/patient/profile/:phn", (req, res) -> {
+            res.type("application/json");
+            String phn = req.params(":phn");
+            
+            try {
+                JsonObject jsonRequest = JsonParser.parseString(req.body()).getAsJsonObject();
+                Patient patient = new Patient();
+                
+                // Map JSON request to Patient object
+                patient.setPersonalHealthNo(phn);
+                patient.setAddress(getStringFromJson(jsonRequest, "address"));
+                patient.setEmail(getStringFromJson(jsonRequest, "email"));
+                patient.setPhoneNumber(getStringFromJson(jsonRequest, "contactNo"));
+                patient.setEmergencyContactName(getStringFromJson(jsonRequest, "emergencyContact"));
+                patient.setEmergencyContactPhone(getStringFromJson(jsonRequest, "emergencyPhone"));
+                patient.setBloodType(getStringFromJson(jsonRequest, "bloodType"));
+                patient.setMedicalConditions(getStringFromJson(jsonRequest, "medicalConditions"));
+
+                // Handle numeric fields
+                try {
+                    String heightStr = getStringFromJson(jsonRequest, "height");
+                    String weightStr = getStringFromJson(jsonRequest, "weight");
+                    if (heightStr != null) patient.setHeight(Float.parseFloat(heightStr));
+                    if (weightStr != null) patient.setWeight(Float.parseFloat(weightStr));
+                } catch (NumberFormatException e) {
+                    res.status(400);
+                    return gson.toJson(new ApiResponse("error", "Invalid number format for height or weight"));
+                }
+
+                PatientDAO patientDAO = new PatientDAO(connHolder[0]);
+                boolean updated = patientDAO.updatePatientProfile(patient);
+                
+                if (updated) {
+                    return gson.toJson(new ApiResponse("success", "Profile updated successfully"));
+                } else {
+                    res.status(404);
+                    return gson.toJson(new ApiResponse("error", "Failed to update profile"));
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", "Server error: " + e.getMessage()));
+            }
+        });
+
     }
 
-    // Move this method outside of main
-    private static String getUserPHNFromSession(spark.Request req) {
-        // Implementation depends on how you're storing user session data
-        // This is just a placeholder
-        return null;
-    }
 
     // Simple API response class
     private static class ApiResponse {

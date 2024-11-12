@@ -263,4 +263,39 @@ public class PatientDAO {
             return false;
         }
     }
+
+    public boolean updatePatientProfile(Patient patient) {
+        String sql = """
+            UPDATE PATIENT 
+            SET Address = ?, 
+                Email = ?, 
+                Phone_Number = ?, 
+                Emergency_Contact_Name = ?, 
+                Emergency_Contact_Phone = ?,
+                Height = ?,
+                Weight = ?,
+                Blood_Type = ?,
+                Medical_Conditions = ?
+            WHERE Personal_Health_No = ?
+        """;
+        
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, patient.getAddress());
+            pstmt.setString(2, patient.getEmail());
+            pstmt.setString(3, patient.getPhoneNumber());
+            pstmt.setString(4, patient.getEmergencyContactName());
+            pstmt.setString(5, patient.getEmergencyContactPhone());
+            pstmt.setFloat(6, patient.getHeight());
+            pstmt.setFloat(7, patient.getWeight());
+            pstmt.setString(8, patient.getBloodType());
+            pstmt.setString(9, patient.getMedicalConditions());
+            pstmt.setString(10, patient.getPersonalHealthNo());
+            
+            int affectedRows = pstmt.executeUpdate();
+            return affectedRows > 0;
+        } catch (SQLException e) {
+            e.printStackTrace();
+            return false;
+        }
+    }
 }

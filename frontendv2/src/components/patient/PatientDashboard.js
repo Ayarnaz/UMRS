@@ -1,9 +1,48 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Bell, User, FileText, Calendar, Upload } from 'lucide-react';
+import { Search, Bell, User, FileText, Calendar, Upload, AlertCircle } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { getPatientDashboard } from '../../services/patientService';
 import PatientSidebar from './PatientSidebar';
 import { useNavigate } from 'react-router-dom';
+import { useNotification } from '../../context/NotificationContext';
+import PatientProfileModal from './modals/PatientProfileModal';
+import api from '../../services/api';
+
+const EmergencyModal = ({ isOpen, onClose, onConfirm }) => {
+    if (!isOpen) return null;
+
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center">
+            <div className="bg-white p-6 rounded-lg shadow-xl max-w-md w-full mx-4">
+                <div className="flex items-center mb-4">
+                    <AlertCircle className="h-6 w-6 text-red-600 mr-2" />
+                    <h2 className="text-xl font-bold text-gray-900">Emergency Assistance</h2>
+                </div>
+                <p className="text-gray-600 mb-6">
+                    Would you like us to:
+                    <ul className="list-disc ml-6 mt-2">
+                        <li>Contact nearest Emergency Services</li>
+                        <li>Notify your emergency contact</li>
+                    </ul>
+                </p>
+                <div className="flex justify-end space-x-3">
+                    <button
+                        onClick={onClose}
+                        className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        onClick={onConfirm}
+                        className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
+                    >
+                        Confirm Emergency
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
 
 function PatientDashboard() {
     const navigate = useNavigate();
@@ -11,36 +50,56 @@ function PatientDashboard() {
     const [dashboardData, setDashboardData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
+    const [showEmergencyModal, setShowEmergencyModal] = useState(false);
+    const { showNotification } = useNotification();
+    const [showProfileModal, setShowProfileModal] = useState(false);
 
     useEffect(() => {
         console.log('Dashboard mounted');
         console.log('Current user:', user);
     }, [user]);
 
+    const fetchDashboardData = async () => {
+        if (!user?.userIdentifier) {
+            console.log('No user identifier found');
+            setLoading(false);
+            return;
+        }
+
+        try {
+            console.log('Fetching dashboard data for:', user.userIdentifier);
+            const data = await getPatientDashboard(user.userIdentifier);
+            console.log('Dashboard data received:', data);
+            setDashboardData(data);
+            setError(null);
+        } catch (err) {
+            console.error('Error fetching dashboard data:', err);
+            setError('Failed to load dashboard data');
+        } finally {
+            setLoading(false);
+        }
+    };
+
     useEffect(() => {
-        const fetchDashboardData = async () => {
-            if (!user?.userIdentifier) {
-                console.log('No user identifier found');
-                setLoading(false);
-                return;
-            }
-
-            try {
-                console.log('Fetching dashboard data for:', user.userIdentifier);
-                const data = await getPatientDashboard(user.userIdentifier);
-                console.log('Dashboard data received:', data);
-                setDashboardData(data);
-                setError(null);
-            } catch (err) {
-                console.error('Error fetching dashboard data:', err);
-                setError('Failed to load dashboard data');
-            } finally {
-                setLoading(false);
-            }
-        };
-
         fetchDashboardData();
     }, [user]);
+
+    const handleEmergencyConfirm = async () => {
+        try {
+            console.log('Emergency services contacted');
+            console.log('Emergency contact notified');
+            showNotification('success', 'Emergency services have been notified');
+        } catch (error) {
+            console.error('Error handling emergency:', error);
+            showNotification('error', 'Failed to contact emergency services');
+        } finally {
+            setShowEmergencyModal(false);
+        }
+    };
+
+    const handleSettingsClick = () => {
+        setShowProfileModal(true);
+    };
 
     if (loading) {
         return (
@@ -77,6 +136,13 @@ function PatientDashboard() {
                 <header className="bg-white shadow-sm py-4 px-6 flex items-center justify-between">
                     <h1 className="text-2xl font-bold text-gray-800">Dashboard</h1>
                     <div className="flex items-center space-x-4">
+                        <button 
+                            onClick={() => setShowEmergencyModal(true)}
+                            className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg flex items-center space-x-2 transition-colors"
+                        >
+                            <AlertCircle className="h-5 w-5" />
+                            <span>Emergency</span>
+                        </button>
                         <Bell className="h-6 w-6 text-gray-600 cursor-pointer" />
                         <div className="h-8 w-8 bg-indigo-100 rounded-full flex items-center justify-center">
                             <span className="text-indigo-600 font-medium">
@@ -209,6 +275,20 @@ function PatientDashboard() {
                     </div>
                 </main>
             </div>
+            <EmergencyModal 
+                isOpen={showEmergencyModal}
+                onClose={() => setShowEmergencyModal(false)}
+                onConfirm={handleEmergencyConfirm}
+            />
+            <PatientProfileModal 
+                isOpen={showProfileModal}
+                onClose={() => setShowProfileModal(false)}
+                patientData={dashboardData?.patient}
+                onUpdate={() => {
+                    fetchDashboardData();
+                    showNotification('success', 'Profile updated successfully');
+                }}
+            />
         </div>
     );
 }

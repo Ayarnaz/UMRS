@@ -4,19 +4,21 @@ import {
   Home, 
   FileText, 
   Calendar, 
-  MessageSquare, 
+  //MessageSquare, 
   Settings, 
   LogOut,
   Bell
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
+import PatientProfileModal from './modals/PatientProfileModal';
 
 function PatientSidebar() {
   const navigate = useNavigate();
   const location = useLocation();
   const { logout, user } = useAuth();
   const [patientDetails, setPatientDetails] = useState(null);
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
 
   // Debug current location
   useEffect(() => {
@@ -41,6 +43,11 @@ function PatientSidebar() {
     fetchPatientDetails();
   }, [user]);
 
+  const handleSettingsClick = () => {
+    console.log('Settings clicked');
+    setIsProfileModalOpen(true);
+  };
+
   const menuItems = [
     { 
       id: 'dashboard',
@@ -61,16 +68,11 @@ function PatientSidebar() {
       path: '/patient/appointments'
     },
     { 
-      id: 'messages',
-      name: 'Messages', 
-      icon: MessageSquare, 
-      path: '/patient/messages'
-    },
-    { 
       id: 'settings',
       name: 'Settings', 
       icon: Settings, 
-      path: '/patient/settings'
+      isModal: true,
+      onClick: () => setIsProfileModalOpen(true)
     }
   ];
 
@@ -123,7 +125,14 @@ function PatientSidebar() {
         {menuItems.map((item) => (
           <button
             key={item.id}
-            onClick={() => handleNavigation(item.path)}
+            onClick={(e) => {
+              e.preventDefault();
+              if (item.isModal) {
+                item.onClick();
+              } else {
+                navigate(item.path);
+              }
+            }}
             className={`flex items-center w-full px-4 py-2 text-sm rounded-md transition-colors duration-150 ${
               isActivePath(item.path)
                 ? 'bg-blue-50 text-blue-600'
@@ -157,6 +166,17 @@ function PatientSidebar() {
           Logout
         </button>
       </div>
+
+      {isProfileModalOpen && (
+        <PatientProfileModal
+          isOpen={isProfileModalOpen}
+          onClose={() => setIsProfileModalOpen(false)}
+          patientData={patientDetails}
+          onUpdate={() => {
+            setIsProfileModalOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 }

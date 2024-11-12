@@ -20,6 +20,22 @@ const calculateAge = (dateOfBirth) => {
   return age;
 };
 
+const calculateBMI = (height, weight) => {
+    if (!height || !weight) return 'N/A';
+    // Convert height from cm to meters
+    const heightInMeters = height / 100;
+    const bmi = (weight / (heightInMeters * heightInMeters)).toFixed(1);
+    return bmi;
+};
+
+const getBMICategory = (bmi) => {
+    const numBMI = parseFloat(bmi);
+    if (numBMI < 18.5) return 'Underweight';
+    if (numBMI < 25) return 'Normal weight';
+    if (numBMI < 30) return 'Overweight';
+    return 'Obese';
+};
+
 function PatientMedicalRecords() {
   const { user } = useAuth();
   const [patientData, setPatientData] = useState(null);
@@ -196,7 +212,7 @@ function PatientMedicalRecords() {
       <PatientSidebar />
       <div className="flex-1 overflow-y-auto">
         <div className="p-6">
-          {/* Remove or comment out this debug output */}
+          {/*debug output */}
           {/*process.env.NODE_ENV === 'development' && (
             <pre className="mb-4 p-2 bg-gray-100 rounded text-xs">
               {JSON.stringify({ user, patientData }, null, 2)}
@@ -218,15 +234,20 @@ function PatientMedicalRecords() {
               <div className="flex-1 grid grid-cols-5 gap-4">
                 <div className="border rounded p-2">
                   <p className="text-sm font-semibold">Height</p>
-                  <p>{patientData.height || 'N/A'}</p>
+                  <p>{patientData.height ? `${patientData.height} cm` : 'N/A'}</p>
                 </div>
                 <div className="border rounded p-2">
                   <p className="text-sm font-semibold">Weight</p>
-                  <p>{patientData.weight || 'N/A'}</p>
+                  <p>{patientData.weight ? `${patientData.weight} kg` : 'N/A'}</p>
                 </div>
                 <div className="border rounded p-2">
                   <p className="text-sm font-semibold">BMI</p>
-                  <p>{patientData.bmi || 'N/A'}</p>
+                  <p>{calculateBMI(patientData.height, patientData.weight)}</p>
+                  {patientData.height && patientData.weight && (
+                      <p className="text-xs text-gray-500">
+                          {getBMICategory(calculateBMI(patientData.height, patientData.weight))}
+                      </p>
+                  )}
                 </div>
                 <div className="border rounded p-2">
                   <p className="text-sm font-semibold">Blood Type</p>

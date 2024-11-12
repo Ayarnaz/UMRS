@@ -5,6 +5,7 @@ import { User, Stethoscope, Building2 } from 'lucide-react';
 import PatientRegistrationModal from './PatientRegistrationModal';
 import HealthcareProfessionalRegistrationModal from './HealthcareProfessionalRegistrationModal';
 import HealthcareInstituteRegistrationModal from './HealthcareInstituteRegistrationModal';
+import ShootingStarsBackground from '../backgrounds/ShootingStarsBackground';
 
 function Login() {
     const navigate = useNavigate();
@@ -123,18 +124,20 @@ function Login() {
     };
 
     return (
-        <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100 py-12 px-4 sm:px-6 lg:px-8">
-            <div className="max-w-md w-full space-y-8">
+        <div className="min-h-screen relative flex items-center justify-center bg-gradient-to-br from-white to-blue-50 py-12 px-4 sm:px-6 lg:px-8">
+            <ShootingStarsBackground />
+            
+            <div className="max-w-md w-full space-y-8 relative z-10">
                 <div>
                     <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
-                        UNITED MEDICAL RECORD SYSTEM
+                        UNIFIED INTERHOSPITAL MEDICAL RECORD SYSTEM
                     </h2>
                     <p className="mt-2 text-center text-sm text-gray-600">
                         Sign in to your account
                     </p>
                 </div>
 
-                <div className="mt-8 bg-white py-8 px-4 shadow-xl rounded-lg sm:px-10">
+                <div className="mt-8 bg-white/70 backdrop-blur-md backdrop-saturate-150 py-8 px-4 shadow-xl rounded-lg sm:px-10 border border-white/20">
                     {error && (
                         <div className="mb-4 bg-red-50 border-l-4 border-red-400 p-4 text-red-700" role="alert">
                             <p className="font-medium">Error</p>
@@ -147,8 +150,8 @@ function Login() {
                             onClick={() => handlePortalChange('patient')}
                             className={`flex flex-col items-center p-4 rounded-lg transition-all w-32 h-24 ${
                                 formData.portalType === 'patient' 
-                                ? 'bg-indigo-100 text-indigo-700 shadow-md' 
-                                : 'bg-gray-50 text-gray-500 hover:bg-gray-100'
+                                ? 'bg-indigo-100/80 backdrop-blur-sm text-indigo-700 shadow-md' 
+                                : 'bg-gray-50/80 backdrop-blur-sm text-gray-500 hover:bg-gray-100/80'
                             }`}
                         >
                             <User className="h-6 w-6 mb-2" />
@@ -159,8 +162,8 @@ function Login() {
                             onClick={() => handlePortalChange('healthcare_professional')}
                             className={`flex flex-col items-center p-4 rounded-lg transition-all w-32 h-24 ${
                                 formData.portalType === 'professional'
-                                ? 'bg-indigo-100 text-indigo-700 shadow-md'
-                                : 'bg-gray-50 text-gray-500 hover:bg-gray-100'
+                                ? 'bg-indigo-100/80 backdrop-blur-sm text-indigo-700 shadow-md'
+                                : 'bg-gray-50/80 backdrop-blur-sm text-gray-500 hover:bg-gray-100/80'
                             }`}
                         >
                             <Stethoscope className="h-6 w-6 mb-2" />
@@ -171,8 +174,8 @@ function Login() {
                             onClick={() => handlePortalChange('healthcare_institute')}
                             className={`flex flex-col items-center p-4 rounded-lg transition-all w-32 h-24 ${
                                 formData.portalType === 'institute'
-                                ? 'bg-indigo-100 text-indigo-700 shadow-md'
-                                : 'bg-gray-50 text-gray-500 hover:bg-gray-100'
+                                ? 'bg-indigo-100/80 backdrop-blur-sm text-indigo-700 shadow-md'
+                                : 'bg-gray-50/80 backdrop-blur-sm text-gray-500 hover:bg-gray-100/80'
                             }`}
                         >
                             <Building2 className="h-6 w-6 mb-2" />

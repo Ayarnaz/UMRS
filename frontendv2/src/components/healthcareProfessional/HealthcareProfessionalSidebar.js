@@ -86,7 +86,7 @@ function HealthcareProfessionalSidebar() {
             <div className="p-4 border-t">
                 <button
                     onClick={handleLogout}
-                    className="w-full flex items-center space-x-2 p-2 rounded-lg text-gray-600 hover:bg-gray-50"
+                    className="w-full flex items-center space-x-2 p-2 rounded-lg text-red-600 hover:bg-red-50 transition-colors"
                 >
                     <LogOut className="h-5 w-5" />
                     <span>Logout</span>

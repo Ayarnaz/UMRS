@@ -4,6 +4,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useNotification } from '../../context/NotificationContext';
 import HealthcareInstituteSidebar from './HealthcareInstituteSidebar';
 import api from '../../services/api';
+import ViewPatientRecordsModal from './modals/ViewPatientRecordsModal';
 
 export default function InstituteMedicalRecordsView() {
     const { user } = useAuth();
@@ -21,6 +22,8 @@ export default function InstituteMedicalRecordsView() {
         purpose: '',
         isEmergency: false
     });
+    const [isPatientRecordsModalOpen, setIsPatientRecordsModalOpen] = useState(false);
+    const [selectedPatientPHN, setSelectedPatientPHN] = useState(null);
 
     const fetchRecordsData = async () => {
         if (!user?.userIdentifier) return;
@@ -118,8 +121,8 @@ export default function InstituteMedicalRecordsView() {
     };
 
     const handleViewRecord = (record) => {
-        setSelectedRecord(record);
-        setIsViewModalOpen(true);
+        setSelectedPatientPHN(record.personalHealthNo);
+        setIsPatientRecordsModalOpen(true);
     };
 
     const handleAddRecord = (personalHealthNo) => {
@@ -384,6 +387,11 @@ export default function InstituteMedicalRecordsView() {
                     )}
                 </main>
             </div>
+            <ViewPatientRecordsModal
+                isOpen={isPatientRecordsModalOpen}
+                onClose={() => setIsPatientRecordsModalOpen(false)}
+                patientPHN={selectedPatientPHN}
+            />
         </div>
     );
 } 

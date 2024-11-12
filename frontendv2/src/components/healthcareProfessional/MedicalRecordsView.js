@@ -4,6 +4,7 @@ import HealthcareProfessionalSidebar from './HealthcareProfessionalSidebar';
 import { useAuth } from '../../context/AuthContext';
 import { useNotification } from '../../context/NotificationContext';
 import api from '../../services/api';
+import ViewPatientRecordsModal from './modals/ViewPatientRecordsModal';
 
 export default function MedicalRecordsView() {
   const { user } = useAuth();
@@ -19,6 +20,8 @@ export default function MedicalRecordsView() {
     purpose: '',
     isEmergency: false
   });
+  const [isViewModalOpen, setIsViewModalOpen] = useState(false);
+  const [selectedPatientPHN, setSelectedPatientPHN] = useState(null);
 
   useEffect(() => {
     fetchRecordsData();
@@ -122,9 +125,8 @@ export default function MedicalRecordsView() {
   };
 
   const handleViewRecord = (record) => {
-    // TODO: Implement view record functionality
-    console.log('Viewing record:', record);
-    // You might want to navigate to a detailed view or open a modal
+    setSelectedPatientPHN(record.personalHealthNo);
+    setIsViewModalOpen(true);
   };
 
   const handleAddRecord = (patientPHN) => {
@@ -313,6 +315,12 @@ export default function MedicalRecordsView() {
           </div>
         </main>
       </div>
+
+      <ViewPatientRecordsModal
+        isOpen={isViewModalOpen}
+        onClose={() => setIsViewModalOpen(false)}
+        patientPHN={selectedPatientPHN}
+      />
     </div>
   );
 } 

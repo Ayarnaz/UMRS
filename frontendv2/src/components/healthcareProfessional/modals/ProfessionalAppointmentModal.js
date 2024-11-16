@@ -3,47 +3,80 @@ import { X } from 'lucide-react';
 import api from '../../../services/api';
 import { Button } from '../../../components/ui/button';
 
-export default function ProfessionalAppointmentModal({ isOpen, onClose, appointment, onAppointmentUpdated, user }) {
+function ProfessionalAppointmentModal({ isOpen, onClose, appointment, onAppointmentUpdated, user }) {
   const [formData, setFormData] = useState({
+    appointmentId: '',
     patientPHN: '',
+    slmcNo: '',
+    healthInstituteNumber: '',
     appointmentDate: '',
     appointmentTime: '',
     purpose: '',
-    notes: '',
-    status: 'Scheduled'
+    status: 'Scheduled',
+    notes: ''
   });
+
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState('');
 
   useEffect(() => {
-    if (appointment) {
-      const date = appointment.start ? new Date(appointment.start) : new Date();
+    if (isOpen && appointment) {
+      // Convert the appointment start time to date and time components
+      const startDate = new Date(appointment.start);
+      const formattedDate = startDate.toISOString().split('T')[0];
+      const formattedTime = startDate.toTimeString().slice(0, 5);
+
       setFormData({
-        patientPHN: appointment.extendedProps?.patientPHN || '',
-        appointmentDate: date.toISOString().split('T')[0],
-        appointmentTime: date.toTimeString().split(' ')[0].slice(0, 5),
-        purpose: appointment.title?.split(' - ')[1] || '',
-        notes: appointment.extendedProps?.notes || '',
-        status: appointment.extendedProps?.status || 'Scheduled'
+        appointmentId: appointment.id,
+        patientPHN: appointment.extendedProps.patientPHN,
+        slmcNo: user?.slmcNo || '',
+        healthInstituteNumber: appointment.extendedProps.healthInstituteNumber,
+        appointmentDate: formattedDate,
+        appointmentTime: formattedTime,
+        purpose: appointment.title.split(' - ')[1] || '',
+        status: appointment.extendedProps.status || 'Scheduled',
+        notes: appointment.extendedProps.notes || ''
+      });
+    } else {
+      // Reset form for new appointments
+      setFormData({
+        appointmentId: '',
+        patientPHN: '',
+        slmcNo: user?.slmcNo || '',
+        healthInstituteNumber: user?.healthInstituteNumber || '',
+        appointmentDate: '',
+        appointmentTime: '',
+        purpose: '',
+        status: 'Scheduled',
+        notes: ''
       });
     }
-  }, [appointment]);
-
-  if (!isOpen) return null;
+  }, [isOpen, appointment, user]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setIsSubmitting(true);
+    setError('');
 
     try {
+      // Check if user and SLMC number exist using userIdentifier
+      if (!user?.userIdentifier) {
+        setError('User SLMC number not found. Please try logging in again.');
+        return;
+      }
+
       const payload = {
-        slmcNo: user.slmcNo,
         patientPHN: formData.patientPHN,
+        slmcNo: user.userIdentifier, // Use userIdentifier instead of slmcNo
+        healthInstituteNumber: formData.healthInstituteNumber || '',
         appointmentDate: formData.appointmentDate,
         appointmentTime: formData.appointmentTime,
         purpose: formData.purpose,
-        notes: formData.notes,
-        status: formData.status
+        status: formData.status || 'Scheduled',
+        notes: formData.notes || ''
       };
+
+      console.log('Submitting appointment with payload:', payload);
 
       if (appointment?.id) {
         await api.put(`/api/professional/appointments/${appointment.id}`, payload);
@@ -53,26 +86,44 @@ export default function ProfessionalAppointmentModal({ isOpen, onClose, appointm
 
       onAppointmentUpdated();
       onClose();
-    } catch (error) {
-      console.error('Error saving appointment:', error);
+    } catch (err) {
+      console.error('Error submitting appointment:', err);
+      setError(err.response?.data?.message || 'Failed to save appointment');
     } finally {
       setIsSubmitting(false);
     }
   };
 
+  const handleDelete = async () => {
+    try {
+      if (!appointment?.id) return;
+      
+      const response = await api.delete(`/api/professional/appointments/${appointment.id}`);
+      if (response.status === 200) {
+        onAppointmentUpdated(); // Refresh the appointments list
+        onClose(); // Close the modal
+      }
+    } catch (error) {
+      console.error('Error deleting appointment:', error);
+      setError('Failed to delete appointment');
+    }
+  };
+
+  if (!isOpen) return null;
+
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-md">
-        <div className="flex justify-between items-center p-4 border-b">
-          <h2 className="text-lg font-semibold">
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-lg p-6 w-full max-w-md">
+        <div className="flex justify-between items-center mb-4">
+          <h2 className="text-xl font-semibold">
             {appointment?.id ? 'Edit Appointment' : 'New Appointment'}
           </h2>
           <button onClick={onClose} className="text-gray-500 hover:text-gray-700">
-            <X className="h-5 w-5" />
+            <X size={20} />
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-4 space-y-4">
+        <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-700">Patient PHN</label>
             <input
@@ -117,16 +168,6 @@ export default function ProfessionalAppointmentModal({ isOpen, onClose, appointm
             />
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Notes</label>
-            <textarea
-              value={formData.notes}
-              onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-              rows="3"
-            />
-          </div>
-
           {appointment?.id && (
             <div>
               <label className="block text-sm font-medium text-gray-700">Status</label>
@@ -142,7 +183,37 @@ export default function ProfessionalAppointmentModal({ isOpen, onClose, appointm
             </div>
           )}
 
-          <div className="flex justify-end space-x-3 mt-6">
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Notes</label>
+            <textarea
+              value={formData.notes}
+              onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+              rows={3}
+            />
+          </div>
+
+          {error && (
+            <div className="text-red-600 text-sm">
+              {error}
+            </div>
+          )}
+
+          <div className="flex justify-end space-x-3 pt-4">
+            {appointment?.id && (
+              <Button
+                type="button"
+                variant="destructive"
+                onClick={() => {
+                  if (window.confirm('Are you sure you want to delete this appointment?')) {
+                    handleDelete();
+                  }
+                }}
+                className="!bg-red-500 hover:!bg-red-600 text-white mr-auto"
+              >
+                Delete
+              </Button>
+            )}
             <Button
               type="button"
               variant="outline"
@@ -161,4 +232,6 @@ export default function ProfessionalAppointmentModal({ isOpen, onClose, appointm
       </div>
     </div>
   );
-} 
+}
+
+export default ProfessionalAppointmentModal; 

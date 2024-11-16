@@ -17,7 +17,7 @@ import static spark.Spark.*;
 //import java.util.Vector;
 import java.util.Date;
 import java.text.SimpleDateFormat;
-//import java.util.Scanner;
+import java.util.stream.Collectors;
 import java.util.List;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -1575,23 +1575,65 @@ public class Main {
             }
         });
 
+        // Update your existing GET endpoint to format for FullCalendar
+        // Add this endpoint for healthcare professional appointments
         get("/api/professional/appointments", (req, res) -> {
             res.type("application/json");
             String slmcNo = req.queryParams("slmcNo");
+            System.out.println("Fetching appointments for SLMC: " + slmcNo);
             
-            try {
-                if (slmcNo == null || slmcNo.isEmpty()) {
-                    res.status(400);
-                    return gson.toJson(new ApiResponse("error", "SLMC number is required"));
-                }
+            if (slmcNo == null || slmcNo.isEmpty()) {
+                res.status(400);
+                Map<String, String> error = new HashMap<>();
+                error.put("error", "SLMC Number is required");
+                return gson.toJson(error);
+            }
 
-                AppointmentDAO appointmentDAO = new AppointmentDAO(connHolder[0]);
-                Vector<Appointment> appointments = appointmentDAO.getAppointmentsByProfessional(slmcNo);
+            try {
+                String sql = """
+                    SELECT 
+                        a.*,
+                        p.Name as patient_name
+                    FROM Appointment a
+                    JOIN Patient p ON a.Personal_Health_No = p.Personal_Health_No
+                    WHERE a.SLMC_No = ?
+                    ORDER BY a.Appointment_Date DESC, a.Appointment_Time DESC
+                """;
+                
+                List<Map<String, Object>> appointments = new ArrayList<>();
+                
+                try (Connection conn = getConnection();
+                    PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                    
+                    pstmt.setString(1, slmcNo);
+                    ResultSet rs = pstmt.executeQuery();
+                    
+                    while (rs.next()) {
+                        Map<String, Object> appointment = new HashMap<>();
+                        appointment.put("id", rs.getInt("Appointment_ID"));
+                        appointment.put("patientPHN", rs.getString("Personal_Health_No"));
+                        appointment.put("patientName", rs.getString("patient_name"));
+                        appointment.put("appointmentDate", rs.getDate("Appointment_Date").toString());
+                        appointment.put("appointmentTime", rs.getTime("Appointment_Time").toString());
+                        appointment.put("purpose", rs.getString("Purpose"));
+                        appointment.put("status", rs.getString("Status"));
+                        appointment.put("notes", rs.getString("Notes"));
+                        appointment.put("healthInstituteNumber", rs.getString("Health_Institute_Number"));
+                        
+                        appointments.add(appointment);
+                    }
+                }
+                
+                System.out.println("Found " + appointments.size() + " appointments");
                 return gson.toJson(appointments);
-            } catch (Exception e) {
+                
+            } catch (SQLException e) {
+                System.err.println("Database error: " + e.getMessage());
                 e.printStackTrace();
                 res.status(500);
-                return gson.toJson(new ApiResponse("error", "Failed to fetch appointments"));
+                Map<String, String> error = new HashMap<>();
+                error.put("error", "Failed to fetch appointments: " + e.getMessage());
+                return gson.toJson(error);
             }
         });
 
@@ -1619,15 +1661,35 @@ public class Main {
             res.type("application/json");
             try {
                 JsonObject jsonRequest = JsonParser.parseString(req.body()).getAsJsonObject();
-                Appointment appointment = new Appointment();
                 
-                appointment.setSlmcNo(jsonRequest.get("slmcNo").getAsString());
+                // Validate required fields
+                String[] requiredFields = {"patientPHN", "slmcNo", "appointmentDate", "appointmentTime", "purpose"};
+                for (String field : requiredFields) {
+                    if (!jsonRequest.has(field) || jsonRequest.get(field) == null || 
+                        jsonRequest.get(field).getAsString().trim().isEmpty()) {
+                        res.status(400);
+                        return gson.toJson(new ApiResponse("error", "Missing required field: " + field));
+                    }
+                }
+
+                Appointment appointment = new Appointment();
                 appointment.setPersonalHealthNo(jsonRequest.get("patientPHN").getAsString());
+                appointment.setSlmcNo(jsonRequest.get("slmcNo").getAsString());
+                appointment.setHealthInstituteNumber(
+                    jsonRequest.has("healthInstituteNumber") ? 
+                    jsonRequest.get("healthInstituteNumber").getAsString() : ""
+                );
                 appointment.setAppointmentDate(java.sql.Date.valueOf(jsonRequest.get("appointmentDate").getAsString()));
                 appointment.setAppointmentTime(java.sql.Time.valueOf(jsonRequest.get("appointmentTime").getAsString() + ":00"));
                 appointment.setPurpose(jsonRequest.get("purpose").getAsString());
-                appointment.setStatus("Scheduled");
-                appointment.setNotes(jsonRequest.has("notes") ? jsonRequest.get("notes").getAsString() : "");
+                appointment.setStatus(
+                    jsonRequest.has("status") ? 
+                    jsonRequest.get("status").getAsString() : "Scheduled"
+                );
+                appointment.setNotes(
+                    jsonRequest.has("notes") ? 
+                    jsonRequest.get("notes").getAsString() : ""
+                );
 
                 AppointmentDAO appointmentDAO = new AppointmentDAO(connHolder[0]);
                 appointmentDAO.insertAppointment(appointment);
@@ -1646,17 +1708,31 @@ public class Main {
                 int appointmentId = Integer.parseInt(req.params(":id"));
                 JsonObject jsonRequest = JsonParser.parseString(req.body()).getAsJsonObject();
                 
-                Appointment appointment = new Appointment();
-                appointment.setAppointmentID(appointmentId);
-                appointment.setSlmcNo(jsonRequest.get("slmcNo").getAsString());
-                appointment.setPersonalHealthNo(jsonRequest.get("patientPHN").getAsString());
-                appointment.setAppointmentDate(java.sql.Date.valueOf(jsonRequest.get("appointmentDate").getAsString()));
-                appointment.setAppointmentTime(java.sql.Time.valueOf(jsonRequest.get("appointmentTime").getAsString() + ":00"));
-                appointment.setPurpose(jsonRequest.get("purpose").getAsString());
-                appointment.setStatus(jsonRequest.get("status").getAsString());
-                appointment.setNotes(jsonRequest.has("notes") ? jsonRequest.get("notes").getAsString() : "");
-
                 AppointmentDAO appointmentDAO = new AppointmentDAO(connHolder[0]);
+                Appointment appointment = appointmentDAO.getAppointmentById(appointmentId);
+                
+                if (appointment == null) {
+                    res.status(404);
+                    return gson.toJson(new ApiResponse("error", "Appointment not found"));
+                }
+                
+                // Update fields if provided
+                if (jsonRequest.has("appointmentDate")) {
+                    appointment.setAppointmentDate(java.sql.Date.valueOf(jsonRequest.get("appointmentDate").getAsString()));
+                }
+                if (jsonRequest.has("appointmentTime")) {
+                    appointment.setAppointmentTime(java.sql.Time.valueOf(jsonRequest.get("appointmentTime").getAsString() + ":00"));
+                }
+                if (jsonRequest.has("purpose")) {
+                    appointment.setPurpose(jsonRequest.get("purpose").getAsString());
+                }
+                if (jsonRequest.has("status")) {
+                    appointment.setStatus(jsonRequest.get("status").getAsString());
+                }
+                if (jsonRequest.has("notes")) {
+                    appointment.setNotes(jsonRequest.get("notes").getAsString());
+                }
+                
                 appointmentDAO.updateAppointment(appointment);
                 
                 return gson.toJson(new ApiResponse("success", "Appointment updated successfully"));
@@ -2373,6 +2449,54 @@ public class Main {
                 e.printStackTrace();
                 res.status(500);
                 return gson.toJson(new ApiResponse("error", "Server error: " + e.getMessage()));
+            }
+        });
+
+        // Add this endpoint for deleting appointments
+        delete("/api/professional/appointments/:id", (req, res) -> {
+            res.type("application/json");
+            String appointmentId = req.params(":id");
+            String slmcNo = req.queryParams("slmcNo");
+            
+            try {
+                if (appointmentId == null || appointmentId.isEmpty()) {
+                    res.status(400);
+                    Map<String, String> error = new HashMap<>();
+                    error.put("error", "Appointment ID is required");
+                    return gson.toJson(error);
+                }
+
+                String sql = "DELETE FROM Appointment WHERE Appointment_ID = ?";
+                
+                try (Connection conn = getConnection();
+                     PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                    
+                    pstmt.setInt(1, Integer.parseInt(appointmentId));
+                    int affectedRows = pstmt.executeUpdate();
+                    
+                    if (affectedRows > 0) {
+                        Map<String, String> response = new HashMap<>();
+                        response.put("message", "Appointment deleted successfully");
+                        return gson.toJson(response);
+                    } else {
+                        res.status(404);
+                        Map<String, String> error = new HashMap<>();
+                        error.put("error", "Appointment not found");
+                        return gson.toJson(error);
+                    }
+                }
+            } catch (SQLException e) {
+                System.err.println("Database error: " + e.getMessage());
+                e.printStackTrace();
+                res.status(500);
+                Map<String, String> error = new HashMap<>();
+                error.put("error", "Failed to delete appointment: " + e.getMessage());
+                return gson.toJson(error);
+            } catch (NumberFormatException e) {
+                res.status(400);
+                Map<String, String> error = new HashMap<>();
+                error.put("error", "Invalid appointment ID format");
+                return gson.toJson(error);
             }
         });
 

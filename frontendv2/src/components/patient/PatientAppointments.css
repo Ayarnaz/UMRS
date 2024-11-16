@@ -1,0 +1,72 @@
+/* Calendar Theme Customization */
+.fc {
+  --fc-border-color: #e5e7eb;
+  --fc-button-text-color: #ffffff;
+  --fc-button-bg-color: #3b82f6;
+  --fc-button-border-color: #2563eb;
+  --fc-button-hover-bg-color: #2563eb;
+  --fc-button-hover-border-color: #1d4ed8;
+  --fc-button-active-bg-color: #1d4ed8;
+  --fc-button-active-border-color: #1e40af;
+  --fc-event-bg-color: #3b82f6;
+  --fc-event-border-color: #2563eb;
+  --fc-today-bg-color: #dbeafe;
+  --fc-now-indicator-color: #3b82f6;
+  --fc-list-event-hover-bg-color: #eff6ff;
+  --fc-highlight-color: #bfdbfe;
+  --fc-non-business-color: #f8fafc;
+}
+
+/* Calendar button styles */
+.fc .fc-button {
+  text-transform: capitalize;
+  font-weight: 500;
+  padding: 0.5rem 1rem;
+  border-radius: 0.375rem;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.fc .fc-button-primary {
+  background-color: #3b82f6;
+  border-color: #2563eb;
+}
+
+.fc .fc-button-primary:hover {
+  background-color: #2563eb;
+  border-color: #1d4ed8;
+}
+
+.fc .fc-button-primary:not(:disabled):active,
+.fc .fc-button-primary:not(:disabled).fc-button-active {
+  background-color: #1d4ed8;
+  border-color: #1e40af;
+}
+
+/* Calendar header styles */
+.fc .fc-toolbar-title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #1e293b;
+}
+
+/* Today highlight */
+.fc .fc-day-today {
+  background-color: #dbeafe !important;
+}
+
+/* Event styles */
+.fc .fc-event {
+  padding: 2px 4px;
+  font-size: 0.875rem;
+  border-radius: 0.25rem;
+}
+
+/* Time grid styles */
+.fc .fc-timegrid-slot {
+  height: 2.5rem;
+}
+
+/* List view styles */
+.fc .fc-list-event:hover td {
+  background-color: #eff6ff;
+} 

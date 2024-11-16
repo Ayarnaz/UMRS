@@ -28,6 +28,7 @@ import java.util.HashMap;
 import com.google.gson.stream.JsonReader;
 import java.io.StringReader;
 import java.util.Vector;
+import java.time.LocalDateTime;
 
 import javax.servlet.MultipartConfigElement;
 import javax.servlet.ServletException;
@@ -42,6 +43,9 @@ import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import java.util.TimeZone;
 
+
+//javac --enable-preview --release 23 -cp "lib/*" -d bin src/*.java > server.log 2>&1
+//java --enable-preview -cp "bin;lib/*" Main 
 //>>>>> javac --enable-preview --release 23 -cp "lib/*" -d bin src/*.java
 //>>>>> java --enable-preview -cp "bin;lib/*" Main 
 
@@ -80,7 +84,7 @@ public class Main {
         dataSource = new HikariDataSource(config);
     }
 
-    // Update the getConnection method
+    // getConnection method
     private static Connection getConnection() throws SQLException {
         synchronized (DB_LOCK) {
             Connection conn = DriverManager.getConnection("jdbc:sqlite:db/umrs.db");
@@ -164,6 +168,7 @@ public class Main {
                     }
                 }
             }
+            
         } catch (ClassNotFoundException | SQLException e) {
             System.out.println("Database connection error: " + e.getMessage());
             e.printStackTrace();
@@ -499,13 +504,6 @@ public class Main {
             return gson.toJson(recentPrescription);
         });
 
-        get("/api/patient/appointments", (req, res) -> {
-            String personalHealthNo = req.queryParams("personalHealthNo");
-            MedicalRecordDAO medicalRecordDAO = new MedicalRecordDAO(connHolder[0]);
-            List<MedicalRecord> appointments = medicalRecordDAO.getRecordsByType(personalHealthNo, "Appointment");
-            return gson.toJson(appointments);
-        });
-
         get("/api/patient/activities", (req, res) -> {
             String personalHealthNo = req.queryParams("personalHealthNo");
             System.out.println("Fetching activities for personalHealthNo: " + personalHealthNo);
@@ -782,44 +780,6 @@ public class Main {
             }
         });
 
-        // Add this after the login endpoint
-        get("/api/auth/me", (req, res) -> {
-            res.type("application/json");
-            
-            // Get the token from the Authorization header
-            String authHeader = req.headers("Authorization");
-            if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-                res.status(401);
-                return gson.toJson(new ApiResponse("error", "No authentication token provided"));
-            }
-
-            String token = authHeader.substring(7); // Remove "Bearer " prefix
-            
-            try {
-                // TODO: Implement proper JWT validation
-                // For now, we'll just check if there's a token and return mock user data
-                if (token != null && !token.isEmpty()) {
-                    // Get username from token (this should be replaced with proper JWT validation)
-                    String username = "mockUsername"; // Replace with actual username extraction from token
-                    
-                    PatientDAO patientDAO = new PatientDAO(connHolder[0]);
-                    Patient patient = patientDAO.getPatientByUsername(username);
-                    
-                    if (patient != null) {
-                        return gson.toJson(patient);
-                    } else {
-                        res.status(404);
-                        return gson.toJson(new ApiResponse("error", "User not found"));
-                    }
-                } else {
-                    res.status(401);
-                    return gson.toJson(new ApiResponse("error", "Invalid token"));
-                }
-            } catch (Exception e) {
-                res.status(500);
-                return gson.toJson(new ApiResponse("error", "Server error: " + e.getMessage()));
-            }
-        });
 
         get("/api/patient/dashboard", (req, res) -> {
             res.type("application/json");
@@ -892,6 +852,14 @@ public class Main {
 
                 MedicalDocumentDAO documentDAO = new MedicalDocumentDAO(connHolder[0]);
                 Vector<MedicalDocument> documents = documentDAO.getDocumentsByPatient(personalHealthNo);
+                
+                // Debug logging
+                System.out.println("Fetched documents: " + documents.size());
+                for (MedicalDocument doc : documents) {
+                    System.out.println("Document ID: " + doc.getDocumentID() + 
+                                        ", Record ID: " + doc.getRecordID());
+                }
+                
                 return gson.toJson(documents);
             } catch (Exception e) {
                 e.printStackTrace();
@@ -902,8 +870,6 @@ public class Main {
 
         post("/api/patient/medical-documents/upload", (req, res) -> {
             res.type("application/json");
-            System.out.println("=== Document Upload Endpoint Hit ===");
-            
             try {
                 // Get the uploaded file
                 Part filePart = req.raw().getPart("file");
@@ -1060,31 +1026,48 @@ public class Main {
         });
 
         // Add a GET endpoint to fetch appointments
-        get("/api/patient/appointments", (req, res) -> {
+        get("/api/patient/appointments/list", (req, res) -> {
             res.type("application/json");
-            String personalHealthNo = req.queryParams("personalHealthNo");
-            System.out.println("Fetching appointments for PHN: " + personalHealthNo);
             
+            // Debug incoming request
+            System.out.println("\n=== Appointment Request Debug ===");
+            System.out.println("Request URL: " + req.url());
+            System.out.println("Query String: " + req.queryString());
+            System.out.println("Raw params: " + req.raw().getParameterMap());
+            
+            // Get the personalHealthNo from query parameters
+            String personalHealthNo = req.queryParams("personalHealthNo");
+            System.out.println("Extracted PHN: " + personalHealthNo);
+            
+            if (personalHealthNo == null || personalHealthNo.isEmpty()) {
+                res.status(400);
+                return gson.toJson(new ApiResponse("error", "Personal Health Number is required"));
+            }
+
             try (Connection conn = getConnection()) {
                 AppointmentDAO appointmentDAO = new AppointmentDAO(conn);
                 Vector<Appointment> appointments = appointmentDAO.getAppointmentsByPatient(personalHealthNo);
                 
-                System.out.println("Found " + appointments.size() + " appointments");
-                
-                if (appointments.isEmpty()) {
-                    System.out.println("No appointments found for PHN: " + personalHealthNo);
-                } else {
-                    for (Appointment apt : appointments) {
-                        System.out.println("Appointment: " + apt.getAppointmentID() + 
-                                         " Date: " + apt.getAppointmentDate() +
-                                         " Time: " + apt.getAppointmentTime());
-                    }
+                List<Map<String, Object>> formattedAppointments = new ArrayList<>();
+                for (Appointment apt : appointments) {
+                    Map<String, Object> formattedApt = new HashMap<>();
+                    formattedApt.put("id", apt.getAppointmentID());
+                    formattedApt.put("appointmentDate", apt.getAppointmentDate().toString());
+                    formattedApt.put("appointmentTime", apt.getAppointmentTime().toString());
+                    formattedApt.put("purpose", apt.getPurpose());
+                    formattedApt.put("status", apt.getStatus());
+                    formattedApt.put("notes", apt.getNotes());
+                    formattedApt.put("slmcNo", apt.getSlmcNo());
+                    formattedApt.put("healthInstituteNumber", apt.getHealthInstituteNumber());
+                    formattedAppointments.add(formattedApt);
                 }
                 
-                return gson.toJson(appointments);
+                return gson.toJson(formattedAppointments);
             } catch (SQLException e) {
+                System.err.println("Database error: " + e.getMessage());
                 e.printStackTrace();
-                return "{\"error\": \"" + e.getMessage() + "\"}";
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", "Database error: " + e.getMessage()));
             }
         });
 
@@ -2451,11 +2434,6 @@ public class Main {
         }
     }
 
-    private static String generateJWTToken(Patient patient) {
-        // TODO: Implement proper JWT token generation
-        // For now, return a mock token
-        return "mock-jwt-token-" + patient.getPersonalHealthNo();
-    }
 
     // Add these methods after the main method in Main.java
 

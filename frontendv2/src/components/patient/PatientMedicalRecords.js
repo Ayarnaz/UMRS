@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Plus, RefreshCw, Search, Upload } from 'lucide-react';
+import { Plus, RefreshCw, Search, Upload, UserCircle, Stethoscope, Pill, Eye, Trash2 } from 'lucide-react';
 import PatientSidebar from './PatientSidebar';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
@@ -52,6 +52,8 @@ function PatientMedicalRecords() {
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('records');
   const [selectedRecordId, setSelectedRecordId] = useState(null);
+  const [recentDiagnosis, setRecentDiagnosis] = useState(null);
+  const [recentPrescription, setRecentPrescription] = useState(null);
 
   const handleView = (record) => {
     setSelectedRecord(record);
@@ -156,7 +158,12 @@ function PatientMedicalRecords() {
       
       console.log('Documents response:', response);
       if (response.data) {
-        setDocuments(response.data);
+        // Map the documents to ensure consistent record ID field
+        const mappedDocuments = response.data.map(doc => ({
+          ...doc,
+          medicalRecordId: doc.medicalRecordId || doc.recordId || null
+        }));
+        setDocuments(mappedDocuments);
       } else {
         setDocuments([]);
       }
@@ -223,7 +230,17 @@ function PatientMedicalRecords() {
           {patientData && (
             <div className="bg-white p-4 rounded-lg shadow mb-6 flex">
               <div className="flex items-center mr-6">
-                <div className="w-16 h-16 bg-gray-300 rounded-full mr-4"></div>
+                <div className="w-16 h-16 bg-gray-200 rounded-full mr-4 flex items-center justify-center">
+                  {patientData?.profilePhoto ? (
+                    <img 
+                      src={patientData.profilePhoto} 
+                      alt="Profile" 
+                      className="w-full h-full rounded-full object-cover"
+                    />
+                  ) : (
+                    <UserCircle className="h-10 w-10 text-gray-500" />
+                  )}
+                </div>
                 <div>
                   <h2 className="font-bold">{patientData.name || 'Name not available'}</h2>
                   <p className="text-sm text-gray-600">
@@ -260,6 +277,69 @@ function PatientMedicalRecords() {
               </div>
             </div>
           )}
+
+          <div className="grid grid-cols-2 gap-6 mb-6">
+            {/* Recent Diagnosis Card */}
+            <div className="bg-white rounded-lg shadow p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-gray-900">Recent Diagnosis</h3>
+                <span className="text-sm text-gray-500">
+                  {recentDiagnosis?.date ? new Date(recentDiagnosis.date).toLocaleDateString() : 'No recent diagnosis'}
+                </span>
+              </div>
+              <div className="space-y-3">
+                {recentDiagnosis ? (
+                  <>
+                    <div className="flex items-start">
+                      <div className="flex-shrink-0">
+                        <Stethoscope className="h-5 w-5 text-blue-500" />
+                      </div>
+                      <div className="ml-3">
+                        <p className="text-sm font-medium text-gray-900">{recentDiagnosis.condition}</p>
+                        <p className="text-sm text-gray-500">{recentDiagnosis.details}</p>
+                      </div>
+                    </div>
+                    <div className="text-sm text-gray-500">
+                      <span className="font-medium">Diagnosed by:</span> Dr. {recentDiagnosis.doctorName}
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-sm text-gray-500">No recent diagnosis available</p>
+                )}
+              </div>
+            </div>
+
+            {/* Recent Prescription Card */}
+            <div className="bg-white rounded-lg shadow p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-gray-900">Recent Prescription</h3>
+                <span className="text-sm text-gray-500">
+                  {recentPrescription?.date ? new Date(recentPrescription.date).toLocaleDateString() : 'No recent prescription'}
+                </span>
+              </div>
+              <div className="space-y-3">
+                {recentPrescription ? (
+                  <>
+                    <div className="flex items-start">
+                      <div className="flex-shrink-0">
+                        <Pill className="h-5 w-5 text-green-500" />
+                      </div>
+                      <div className="ml-3">
+                        <p className="text-sm font-medium text-gray-900">{recentPrescription.medication}</p>
+                        <p className="text-sm text-gray-500">{recentPrescription.dosage}</p>
+                        <p className="text-sm text-gray-500">{recentPrescription.instructions}</p>
+                      </div>
+                    </div>
+                    <div className="text-sm text-gray-500">
+                      <span className="font-medium">Prescribed by:</span> Dr. {recentPrescription.doctorName}
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-sm text-gray-500">No recent prescription available</p>
+                )}
+              </div>
+            </div>
+          </div>
 
           {/* Error Message - Show as notification instead of replacing content */}
           {error && (
@@ -447,7 +527,13 @@ function PatientMedicalRecords() {
                             {doc.documentType}
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                            {doc.recordId}
+                            {doc.recordID || doc.recordId ? (
+                              <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded-full text-xs">
+                                {doc.recordID || doc.recordId}
+                              </span>
+                            ) : (
+                              <span className="text-gray-400 italic">Not Associated</span>
+                            )}
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                             {new Date(doc.uploadDate).toLocaleDateString()}
@@ -456,14 +542,16 @@ function PatientMedicalRecords() {
                             <div className="flex space-x-2">
                               <button
                                 onClick={() => handleViewDocument(doc.filePath)}
-                                className="text-blue-600 hover:text-blue-900"
+                                className="text-blue-600 hover:text-blue-900 flex items-center"
                               >
+                                <Eye className="w-4 h-4 mr-1" />
                                 View
                               </button>
                               <button
                                 onClick={() => handleDeleteDocument(doc.documentId || doc.documentID)}
-                                className="text-red-600 hover:text-red-900"
+                                className="text-red-600 hover:text-red-900 flex items-center"
                               >
+                                <Trash2 className="w-4 h-4 mr-1" />
                                 Delete
                               </button>
                             </div>

@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Bell, Search, Filter, Download, Eye, Edit, Share2, Plus } from "lucide-react";
+import { Bell, Search, Filter, Download, Eye, Edit, Share2, Plus, AlertTriangle } from "lucide-react";
 import HealthcareProfessionalSidebar from './HealthcareProfessionalSidebar';
 import { useAuth } from '../../context/AuthContext';
 import { useNotification } from '../../context/NotificationContext';
 import api from '../../services/api';
 import ViewPatientRecordsModal from './modals/ViewPatientRecordsModal';
+import ProfessionalAddRecordModal from './modals/ProfessionalAddRecordModal';
 
 export default function MedicalRecordsView() {
   const { user } = useAuth();
@@ -22,6 +23,9 @@ export default function MedicalRecordsView() {
   });
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
   const [selectedPatientPHN, setSelectedPatientPHN] = useState(null);
+  const [showEmergencyConfirm, setShowEmergencyConfirm] = useState(false);
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [selectedPatientForRecord, setSelectedPatientForRecord] = useState(null);
 
   useEffect(() => {
     fetchRecordsData();
@@ -130,9 +134,41 @@ export default function MedicalRecordsView() {
   };
 
   const handleAddRecord = (patientPHN) => {
-    // TODO: Implement add record functionality
-    console.log('Adding record for patient:', patientPHN);
-    // You might want to navigate to an add record form or open a modal
+    setSelectedPatientForRecord(patientPHN);
+    setIsAddModalOpen(true);
+  };
+
+  const handleEmergencyClick = () => {
+    if (!requestForm.personalHealthNo || !requestForm.purpose) {
+      showNotification('error', 'Please fill in all required fields');
+      return;
+    }
+    setShowEmergencyConfirm(true);
+  };
+
+  const handleRecordAdded = async () => {
+    try {
+      // Use the same endpoint as patient portal since access is already verified
+      const response = await api.get(`/api/patient/medical-records`, {
+        params: { personalHealthNo: selectedPatientPHN }
+      });
+      
+      if (response.data) {
+        // Update the records in the view
+        setMedicalRecords(prevRecords => {
+          // Update records for the specific patient while keeping others
+          const otherRecords = prevRecords.filter(r => r.personalHealthNo !== selectedPatientPHN);
+          return [...otherRecords, ...response.data];
+        });
+      }
+      
+      setIsAddModalOpen(false);
+      showNotification('success', 'Record added successfully');
+      
+    } catch (error) {
+      console.error('Error refreshing records:', error);
+      showNotification('error', 'Failed to refresh records');
+    }
   };
 
   return (
@@ -196,7 +232,7 @@ export default function MedicalRecordsView() {
               </div>
               <div className="flex justify-between">
                 <button
-                  onClick={() => handleRequestAccess(true)}
+                  onClick={handleEmergencyClick}
                   className="bg-red-500 text-white px-4 py-2 rounded-md hover:bg-red-600 transition-colors disabled:opacity-50"
                   disabled={loading || !requestForm.personalHealthNo || !requestForm.purpose}
                 >
@@ -320,7 +356,50 @@ export default function MedicalRecordsView() {
         isOpen={isViewModalOpen}
         onClose={() => setIsViewModalOpen(false)}
         patientPHN={selectedPatientPHN}
+        medicalRecords={medicalRecords}
       />
+
+      <ProfessionalAddRecordModal
+        isOpen={isAddModalOpen}
+        onClose={() => setIsAddModalOpen(false)}
+        onRecordAdded={handleRecordAdded}
+        user={user}
+        patientPHN={selectedPatientForRecord}
+      />
+
+      {showEmergencyConfirm && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+            <div className="flex items-center justify-center mb-4">
+              <div className="bg-red-100 rounded-full p-3">
+                <AlertTriangle className="h-6 w-6 text-red-600" />
+              </div>
+            </div>
+            <h3 className="text-lg font-semibold text-center mb-2">Emergency Access Request</h3>
+            <p className="text-gray-600 text-center mb-4">
+              This will notify both the patient and their emergency contact immediately. 
+              Please confirm this is an emergency situation.
+            </p>
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={() => setShowEmergencyConfirm(false)}
+                className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  setShowEmergencyConfirm(false);
+                  handleRequestAccess(true);
+                }}
+                className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700"
+              >
+                Confirm Emergency Access
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 } 

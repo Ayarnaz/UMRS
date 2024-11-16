@@ -2500,6 +2500,82 @@ public class Main {
             }
         });
 
+        // endpoint for healthcare professionals to add medical records
+        post("/api/professional/medical-records", (req, res) -> {
+            res.type("application/json");
+            Connection[] connHolder = new Connection[]{null};
+            
+            try {
+                String requestBody = req.body();
+                JsonObject jsonRequest = JsonParser.parseString(requestBody).getAsJsonObject();
+                
+                String personalHealthNo = jsonRequest.get("personalHealthNo").getAsString();
+                
+                // Create the medical record
+                MedicalRecord record = new MedicalRecord();
+                record.setPersonalHealthNo(personalHealthNo);
+                record.setSlmcNo(jsonRequest.get("slmcNo").getAsString());
+                record.setHealthInstituteNumber(jsonRequest.get("healthInstituteNumber").getAsString());
+                record.setDateOfVisit(LocalDate.parse(jsonRequest.get("dateOfVisit").getAsString()));
+                record.setDiagnosis(jsonRequest.get("diagnosis").getAsString());
+                record.setTreatment(jsonRequest.get("treatment").getAsString());
+                record.setType(jsonRequest.get("type").getAsString());
+                record.setSummary(jsonRequest.get("summary").getAsString());
+                record.setNotes(jsonRequest.has("notes") ? jsonRequest.get("notes").getAsString() : "");
+
+                // Log the record data before insertion
+                System.out.println("Inserting medical record with PHN: " + personalHealthNo);
+
+                connHolder[0] = getConnection();
+                MedicalRecordDAO recordDAO = new MedicalRecordDAO(connHolder[0]);
+                recordDAO.insertMedicalRecord(record);
+
+                return gson.toJson(new ApiResponse("success", "Medical record created successfully", Integer.valueOf(record.getRecordId())));
+                
+            } catch (Exception e) {
+                e.printStackTrace();
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", "Failed to create medical record: " + e.getMessage()));
+            } finally {
+                if (connHolder[0] != null) {
+                    try {
+                        connHolder[0].close();
+                    } catch (SQLException e) {
+                        e.printStackTrace();
+                    }
+                }
+            }
+        });
+
+        // Add a debug endpoint to check records
+        get("/api/debug/check-records/:phn", (req, res) -> {
+            res.type("application/json");
+            String phn = req.params(":phn");
+            
+            try (Connection conn = getConnection()) {
+                String sql = "SELECT * FROM Medical_Record WHERE Personal_Health_No = ?";
+                try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                    pstmt.setString(1, phn);
+                    ResultSet rs = pstmt.executeQuery();
+                    
+                    System.out.println("\nChecking records for PHN: " + phn);
+                    while (rs.next()) {
+                        System.out.println("Record ID: " + rs.getInt("Record_ID"));
+                        System.out.println("Summary: " + rs.getString("Summary"));
+                        System.out.println("Date: " + rs.getDate("Date_of_Visit"));
+                        System.out.println("Type: " + rs.getString("Type"));
+                        System.out.println("--------------------");
+                    }
+                }
+                return gson.toJson(
+                    new ApiResponse("success", "Records checked - see server console"));
+            } catch (Exception e) {
+                e.printStackTrace();
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", "Failed to check records: " + e.getMessage()));
+            }
+        });
+
     }
 
 

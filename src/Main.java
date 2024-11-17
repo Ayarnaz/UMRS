@@ -42,6 +42,8 @@ import java.util.Base64;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import java.util.TimeZone;
+import com.google.gson.ExclusionStrategy;
+import com.google.gson.FieldAttributes;
 
 
 //javac --enable-preview --release 23 -cp "lib/*" -d bin src/*.java > server.log 2>&1
@@ -73,28 +75,44 @@ public class Main {
     private static void initializeDataSource() {
         HikariConfig config = new HikariConfig();
         config.setJdbcUrl("jdbc:sqlite:db/umrs.db");
-        config.setMaximumPoolSize(10);
-        config.setMinimumIdle(5);
-        config.setConnectionTimeout(30000);
-        config.setIdleTimeout(600000);
-        config.setMaxLifetime(1800000);
-        config.addDataSourceProperty("journal_mode", "WAL");
-        config.addDataSourceProperty("busy_timeout", "30000");
-        config.addDataSourceProperty("synchronous", "NORMAL");
+        config.setMaximumPoolSize(20);          // Increased from 10
+        config.setMinimumIdle(10);              // Increased from 5
+        config.setConnectionTimeout(30000);      // 30 seconds
+        config.setIdleTimeout(300000);          // 5 minutes (reduced from 10)
+        config.setMaxLifetime(900000);          // 15 minutes (reduced from 30)
+        config.setConnectionTestQuery("SELECT 1");
+        
+        // SQLite specific optimizations
+        config.addDataSourceProperty("journal_mode", "WAL");       // Write-Ahead Logging
+        config.addDataSourceProperty("synchronous", "NORMAL");     // Better performance with acceptable safety
+        config.addDataSourceProperty("cache_size", "-2000");       // 2MB cache
+        config.addDataSourceProperty("busy_timeout", "30000");     // 30 second timeout
+        config.addDataSourceProperty("temp_store", "MEMORY");      // Store temp tables in memory
+        config.addDataSourceProperty("mmap_size", "30000000000");  // 30GB memory-mapped I/O
+        
         dataSource = new HikariDataSource(config);
     }
 
     // getConnection method
     private static Connection getConnection() throws SQLException {
         synchronized (DB_LOCK) {
-            Connection conn = DriverManager.getConnection("jdbc:sqlite:db/umrs.db");
-            conn.setAutoCommit(true);
-            // Set timeout for acquiring locks
+            Connection conn = getPooledConnection();
             try (Statement stmt = conn.createStatement()) {
-                stmt.execute("PRAGMA busy_timeout = 5000");
+                stmt.execute("PRAGMA busy_timeout = 30000");
+                stmt.execute("PRAGMA temp_store = MEMORY");
+                stmt.execute("PRAGMA cache_size = -2000");
             }
             return conn;
         }
+    }
+
+    private static Connection getPooledConnection() throws SQLException {
+        if (dataSource == null) {
+            throw new SQLException("DataSource not initialized");
+        }
+        Connection conn = dataSource.getConnection();
+        conn.setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);
+        return conn;
     }
 
     public static void main(String[] args) {
@@ -761,22 +779,46 @@ public class Main {
         // Add this endpoint to handle medical records requests
         get("/api/patient/medical-records", (req, res) -> {
             res.type("application/json");
-            try {
-                String personalHealthNo = req.queryParams("personalHealthNo");
-                if (personalHealthNo == null || personalHealthNo.isEmpty()) {
-                    res.status(400);
-                    return gson.toJson(new ApiResponse("error", "Personal Health Number is required"));
+            String phn = req.queryParams("phn");
+            
+            if (phn == null || phn.trim().isEmpty()) {
+                res.status(400);
+                return gson.toJson(new ApiResponse("error", "Personal Health Number is required"));
+            }
+
+            System.out.println("Processing request for patient records - PHN: " + phn);
+            
+            try (Connection conn = getConnection()) {
+                // Configure connection for immediate reads
+                conn.setAutoCommit(false);
+                conn.setTransactionIsolation(Connection.TRANSACTION_SERIALIZABLE);
+                
+                try (Statement stmt = conn.createStatement()) {
+                    // Force immediate synchronization
+                    stmt.execute("PRAGMA synchronous = FULL");
+                    stmt.execute("PRAGMA journal_mode = WAL");
+                    stmt.execute("PRAGMA wal_checkpoint(FULL)");
+                    stmt.execute("PRAGMA cache_size = 0");
+                    stmt.execute("PRAGMA read_uncommitted = 0");
                 }
 
-                // Get medical records from database
-                MedicalRecordDAO medicalRecordDAO = new MedicalRecordDAO(connHolder[0]);
-                List<MedicalRecord> records = medicalRecordDAO.getRecordsByPHN(personalHealthNo);
+                MedicalRecordDAO recordDAO = new MedicalRecordDAO(conn);
+                List<MedicalRecord> records = recordDAO.getAllRecordsByPHN(phn);
+                
+                // Ensure all changes are committed
+                conn.commit();
+                
+                Map<String, Object> response = new HashMap<>();
+                response.put("medicalRecords", records);
+                System.out.println("Returning " + records.size() + " records for PHN: " + phn);
+                
+                return gson.toJson(response);
 
-                return gson.toJson(records);
             } catch (Exception e) {
+                System.err.println("Error processing patient records request: " + e.getMessage());
                 e.printStackTrace();
                 res.status(500);
-                return gson.toJson(new ApiResponse("error", "Server error: " + e.getMessage()));
+                return gson.toJson(new ApiResponse("error", "Failed to fetch records: " + e.getMessage()));
             }
         });
 
@@ -1337,16 +1379,53 @@ public class Main {
         get("/api/professional/records-data", (req, res) -> {
             res.type("application/json");
             String slmcNo = req.queryParams("slmcNo");
-            System.out.println("Received records-data request for SLMC: " + slmcNo);
             
-            try {
-                // Use the existing recordAccessDAO instance
-                Map<String, List<Map<String, Object>>> data = recordAccessDAO.getRecordsData(slmcNo);
-                return gson.toJson(data);
+            if (slmcNo == null || slmcNo.trim().isEmpty()) {
+                res.status(400);
+                return gson.toJson(new ApiResponse("error", "SLMC number is required"));
+            }
+
+            System.out.println("Fetching records for SLMC: " + slmcNo);
+            
+            try (Connection conn = getConnection()) {
+                // Configure connection
+                conn.setAutoCommit(false);
+                conn.setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);
+                
+                // Disable statement cache
+                try (Statement stmt = conn.createStatement()) {
+                    stmt.execute("PRAGMA cache_size = 0");
+                    stmt.execute("PRAGMA temp_store = MEMORY");
+                }
+
+                // Get records
+                MedicalRecordDAO recordDAO = new MedicalRecordDAO(conn);
+                List<MedicalRecord> medicalRecords = recordDAO.getRecordsByProfessional(slmcNo);
+                System.out.println("Retrieved " + medicalRecords.size() + " medical records");
+
+                // Get access records
+                List<Map<String, Object>> accessedRecords = new ArrayList<>();
+                if (recordAccessDAO != null) {
+                    Map<String, List<Map<String, Object>>> accessData = recordAccessDAO.getRecordsData(slmcNo);
+                    accessedRecords = accessData.get("accessedRecords");
+                    System.out.println("Retrieved " + accessedRecords.size() + " access records");
+                }
+
+                // Commit transaction
+                conn.commit();
+                
+                // Build response
+                Map<String, Object> response = new HashMap<>();
+                response.put("medicalRecords", medicalRecords);
+                response.put("accessedRecords", accessedRecords);
+                
+                return gson.toJson(response);
+
             } catch (Exception e) {
+                System.err.println("Error fetching professional records: " + e.getMessage());
                 e.printStackTrace();
                 res.status(500);
-                return gson.toJson(new ApiResponse("error", "Failed to fetch records: " + e.getMessage()));
+                return gson.toJson(new ApiResponse("error", "Failed to fetch records"));
             }
         });
 
@@ -2503,43 +2582,49 @@ public class Main {
         // endpoint for healthcare professionals to add medical records
         post("/api/professional/medical-records", (req, res) -> {
             res.type("application/json");
-            Connection[] connHolder = new Connection[]{null};
+            Connection conn = null;
             
             try {
+                // Get request body and parse it
                 String requestBody = req.body();
-                JsonObject jsonRequest = JsonParser.parseString(requestBody).getAsJsonObject();
+                System.out.println("Received medical record data: " + requestBody);
                 
-                String personalHealthNo = jsonRequest.get("personalHealthNo").getAsString();
+                // Create a custom Gson instance that ignores the recordId field
+                Gson customGson = new GsonBuilder()
+                    .setDateFormat("yyyy-MM-dd")
+                    .create();
                 
-                // Create the medical record
-                MedicalRecord record = new MedicalRecord();
-                record.setPersonalHealthNo(personalHealthNo);
-                record.setSlmcNo(jsonRequest.get("slmcNo").getAsString());
-                record.setHealthInstituteNumber(jsonRequest.get("healthInstituteNumber").getAsString());
-                record.setDateOfVisit(LocalDate.parse(jsonRequest.get("dateOfVisit").getAsString()));
-                record.setDiagnosis(jsonRequest.get("diagnosis").getAsString());
-                record.setTreatment(jsonRequest.get("treatment").getAsString());
-                record.setType(jsonRequest.get("type").getAsString());
-                record.setSummary(jsonRequest.get("summary").getAsString());
-                record.setNotes(jsonRequest.has("notes") ? jsonRequest.get("notes").getAsString() : "");
-
-                // Log the record data before insertion
-                System.out.println("Inserting medical record with PHN: " + personalHealthNo);
-
-                connHolder[0] = getConnection();
-                MedicalRecordDAO recordDAO = new MedicalRecordDAO(connHolder[0]);
+                MedicalRecord record = customGson.fromJson(requestBody, MedicalRecord.class);
+                
+                // Get a fresh connection
+                conn = getConnection();
+                conn.setAutoCommit(false);
+                
+                // Create DAO and insert record
+                MedicalRecordDAO recordDAO = new MedicalRecordDAO(conn);
                 recordDAO.insertMedicalRecord(record);
-
-                return gson.toJson(new ApiResponse("success", "Medical record created successfully", Integer.valueOf(record.getRecordId())));
+                
+                // Commit the transaction
+                conn.commit();
+                
+                // Return success response with the new record ID
+                return gson.toJson(new ApiResponse("success", "Record added successfully"));
                 
             } catch (Exception e) {
+                if (conn != null) {
+                    try {
+                        conn.rollback();
+                    } catch (SQLException ex) {
+                        ex.printStackTrace();
+                    }
+                }
                 e.printStackTrace();
                 res.status(500);
-                return gson.toJson(new ApiResponse("error", "Failed to create medical record: " + e.getMessage()));
+                return gson.toJson(new ApiResponse("error", "Failed to add record: " + e.getMessage()));
             } finally {
-                if (connHolder[0] != null) {
+                if (conn != null) {
                     try {
-                        connHolder[0].close();
+                        conn.close();
                     } catch (SQLException e) {
                         e.printStackTrace();
                     }
@@ -2576,6 +2661,58 @@ public class Main {
             }
         });
 
+        // After database initialization
+        initializeDataSource();
+        
+        try (Connection conn = getConnection()) {
+            // Create indexes
+            createIndexes(conn);
+            
+            // Optimize database
+            try (Statement stmt = conn.createStatement()) {
+                // Enable memory-mapped I/O
+                stmt.execute("PRAGMA mmap_size = 30000000000");
+                
+                // Set page size for better performance
+                stmt.execute("PRAGMA page_size = 4096");
+                
+                // Enable Write-Ahead Logging
+                stmt.execute("PRAGMA journal_mode = WAL");
+                
+                // Set cache size (in pages)
+                stmt.execute("PRAGMA cache_size = -2000");
+                
+                // Set synchronous mode
+                stmt.execute("PRAGMA synchronous = NORMAL");
+                
+                // Store temp tables and indices in memory
+                stmt.execute("PRAGMA temp_store = MEMORY");
+                
+                // Analyze the database for query optimization
+                stmt.execute("ANALYZE");
+            }
+        } catch (SQLException e) {
+            System.err.println("Error optimizing database: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    private static void createIndexes(Connection conn) throws SQLException {
+        String[] indexes = {
+            "CREATE INDEX IF NOT EXISTS idx_medical_record_phn ON Medical_Record(Personal_Health_No)",
+            "CREATE INDEX IF NOT EXISTS idx_medical_record_slmc ON Medical_Record(SLMC_No)",
+            "CREATE INDEX IF NOT EXISTS idx_medical_record_date ON Medical_Record(Date_of_Visit)",
+            "CREATE INDEX IF NOT EXISTS idx_appointment_phn ON Appointment(Personal_Health_No)",
+            "CREATE INDEX IF NOT EXISTS idx_appointment_date ON Appointment(Appointment_Date)",
+            "CREATE INDEX IF NOT EXISTS idx_record_access_phn ON Record_Access_Requests(Personal_Health_No)",
+            "CREATE INDEX IF NOT EXISTS idx_record_access_slmc ON Record_Access_Requests(SLMC_No)"
+        };
+        
+        try (Statement stmt = conn.createStatement()) {
+            for (String index : indexes) {
+                stmt.execute(index);
+            }
+        }
     }
 
 

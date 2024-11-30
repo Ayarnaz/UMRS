@@ -1,4 +1,5 @@
 import java.sql.*;
+import java.util.*;
 
 public class HealthcareProfessionalDAO {
 
@@ -102,4 +103,154 @@ public class HealthcareProfessionalDAO {
             System.out.println(e.getMessage());
         }
     }
+
+    // Add these new methods to HealthcareProfessionalDAO class
+
+    public Map<String, Object> getAnalytics(String slmcNo, int months) throws SQLException {
+        Map<String, Object> analytics = new HashMap<>();
+        
+        // Core analytics that match your database
+        analytics.put("summaryStats", getSummaryStats(slmcNo, months));
+        analytics.put("monthlyTrends", getMonthlyTrends(slmcNo, months));
+        analytics.put("genderDistribution", getGenderDistribution(slmcNo, months));
+        analytics.put("visitTimes", getVisitTimeDistribution(slmcNo, months));
+        
+        return analytics;
+    }
+
+    private Map<String, Integer> getSummaryStats(String slmcNo, int months) throws SQLException {
+        Map<String, Integer> stats = new HashMap<>();
+        
+        String sql = """
+            SELECT 
+                COUNT(DISTINCT mr.Personal_Health_No) as total_patients,
+                COUNT(*) as total_visits,
+                COUNT(DISTINCT CASE 
+                    WHEN mr.Date_of_Visit >= date('now', '-30 days') 
+                    THEN mr.Personal_Health_No 
+                    END) as active_patients,
+                COUNT(DISTINCT CASE 
+                    WHEN mr.Date_of_Visit = date('now') 
+                    THEN mr.Record_ID 
+                    END) as today_visits
+            FROM Medical_Record mr
+            WHERE mr.SLMC_No = ?
+            AND mr.Date_of_Visit >= date('now', ? || ' months')
+        """;
+        
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, slmcNo);
+            pstmt.setInt(2, -months);
+            
+            ResultSet rs = pstmt.executeQuery();
+            if (rs.next()) {
+                stats.put("totalPatients", rs.getInt("total_patients"));
+                stats.put("totalVisits", rs.getInt("total_visits"));
+                stats.put("activePatients", rs.getInt("active_patients"));
+                stats.put("todayVisits", rs.getInt("today_visits"));
+            }
+        }
+        
+        return stats;
+    }
+
+    private List<Map<String, Object>> getMonthlyTrends(String slmcNo, int months) throws SQLException {
+        List<Map<String, Object>> trends = new ArrayList<>();
+        
+        String sql = """
+            SELECT 
+                strftime('%Y-%m', Date_of_Visit) as month,
+                COUNT(*) as visit_count,
+                COUNT(DISTINCT Personal_Health_No) as unique_patients,
+                ROUND(AVG(CASE 
+                    WHEN Type = 'follow-up' THEN 1
+                    ELSE 0
+                END) * 100, 1) as follow_up_rate
+            FROM Medical_Record 
+            WHERE SLMC_No = ?
+            AND Date_of_Visit >= date('now', ? || ' months')
+            GROUP BY month
+            ORDER BY month DESC
+        """;
+        
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, slmcNo);
+            pstmt.setInt(2, -months);
+            
+            ResultSet rs = pstmt.executeQuery();
+            while (rs.next()) {
+                Map<String, Object> item = new HashMap<>();
+                item.put("month", rs.getString("month"));
+                item.put("visitCount", rs.getInt("visit_count"));
+                item.put("uniquePatients", rs.getInt("unique_patients"));
+                item.put("followUpRate", rs.getDouble("follow_up_rate"));
+                trends.add(item);
+            }
+        }
+        
+        return trends;
+    }
+
+    private List<Map<String, Object>> getVisitTimeDistribution(String slmcNo, int months) throws SQLException {
+        String sql = """
+            SELECT 
+                CASE 
+                    WHEN strftime('%H', Date_of_Visit) BETWEEN '09' AND '11' THEN 'Morning (9-11)'
+                    WHEN strftime('%H', Date_of_Visit) BETWEEN '12' AND '14' THEN 'Noon (12-2)'
+                    WHEN strftime('%H', Date_of_Visit) BETWEEN '15' AND '17' THEN 'Afternoon (3-5)'
+                    ELSE 'Evening (After 5)'
+                END as time_slot,
+                COUNT(*) as count
+            FROM Medical_Record
+            WHERE SLMC_No = ?
+            AND Date_of_Visit >= date('now', '-' || ? || ' months')
+            GROUP BY time_slot
+            ORDER BY time_slot
+        """;
+        
+        List<Map<String, Object>> distribution = new ArrayList<>();
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, slmcNo);
+            pstmt.setInt(2, months);
+            ResultSet rs = pstmt.executeQuery();
+            
+            while (rs.next()) {
+                Map<String, Object> item = new HashMap<>();
+                item.put("timeSlot", rs.getString("time_slot"));
+                item.put("count", rs.getInt("count"));
+                distribution.add(item);
+            }
+        }
+        return distribution;
+    }
+
+    private List<Map<String, Object>> getGenderDistribution(String slmcNo, int months) throws SQLException {
+        String sql = """
+            SELECT 
+                p.Gender,
+                COUNT(DISTINCT mr.Personal_Health_No) as count
+            FROM Medical_Record mr
+            JOIN Patient p ON mr.Personal_Health_No = p.Personal_Health_No
+            WHERE mr.SLMC_No = ?
+            AND mr.Date_of_Visit >= date('now', '-' || ? || ' months')
+            GROUP BY p.Gender
+        """;
+        
+        List<Map<String, Object>> distribution = new ArrayList<>();
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, slmcNo);
+            pstmt.setInt(2, months);
+            ResultSet rs = pstmt.executeQuery();
+            
+            while (rs.next()) {
+                Map<String, Object> item = new HashMap<>();
+                item.put("gender", rs.getString("Gender"));
+                item.put("count", rs.getInt("count"));
+                distribution.add(item);
+            }
+        }
+        return distribution;
+    }
+
+    // Add similar methods for referral sources, visit frequency, and consultation duration
 }

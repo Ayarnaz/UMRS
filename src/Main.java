@@ -2772,6 +2772,8 @@ public class Main {
         get("/api/professional/analytics", (req, res) -> {
             res.type("application/json");
             String slmcNo = req.queryParams("slmcNo");
+            String timeRange = req.queryParams("range");
+            int months = timeRange != null ? Integer.parseInt(timeRange.replace("m", "")) : 12;
             
             if (slmcNo == null || slmcNo.trim().isEmpty()) {
                 res.status(400);
@@ -2779,58 +2781,10 @@ public class Main {
             }
 
             try (Connection conn = getConnection()) {
-                Map<String, Object> analytics = new HashMap<>();
+                HealthcareProfessionalDAO professionalDAO = new HealthcareProfessionalDAO(conn);
+                Map<String, Object> analytics = professionalDAO.getAnalytics(slmcNo, months);
                 
-                // Get diagnosis distribution (most common conditions)
-                String diagnosisSql = """
-                    SELECT Diagnosis, COUNT(*) as count 
-                    FROM Medical_Record 
-                    WHERE SLMC_No = ? 
-                    GROUP BY Diagnosis 
-                    ORDER BY count DESC 
-                    LIMIT 5
-                """;
-                
-                try (PreparedStatement pstmt = conn.prepareStatement(diagnosisSql)) {
-                    pstmt.setString(1, slmcNo);
-                    ResultSet rs = pstmt.executeQuery();
-                    
-                    List<Map<String, Object>> diagnosisCounts = new ArrayList<>();
-                    while (rs.next()) {
-                        Map<String, Object> item = new HashMap<>();
-                        item.put("diagnosis", rs.getString("Diagnosis"));
-                        item.put("count", rs.getInt("count"));
-                        diagnosisCounts.add(item);
-                    }
-                    analytics.put("commonDiagnoses", diagnosisCounts);
-                }
-                
-                // Get monthly visit counts
-                String visitsSql = """
-                    SELECT strftime('%Y-%m', Date_of_Visit) as month, COUNT(*) as count 
-                    FROM Medical_Record 
-                    WHERE SLMC_No = ? 
-                    GROUP BY month 
-                    ORDER BY month DESC 
-                    LIMIT 6
-                """;
-                
-                try (PreparedStatement pstmt = conn.prepareStatement(visitsSql)) {
-                    pstmt.setString(1, slmcNo);
-                    ResultSet rs = pstmt.executeQuery();
-                    
-                    List<Map<String, Object>> monthlyCounts = new ArrayList<>();
-                    while (rs.next()) {
-                        Map<String, Object> item = new HashMap<>();
-                        item.put("month", rs.getString("month"));
-                        item.put("count", rs.getInt("count"));
-                        monthlyCounts.add(item);
-                    }
-                    analytics.put("monthlyVisits", monthlyCounts);
-                }
-
                 return gson.toJson(analytics);
-
             } catch (Exception e) {
                 System.err.println("Error generating analytics: " + e.getMessage());
                 e.printStackTrace();
@@ -2845,33 +2799,39 @@ public class Main {
             Map<String, Object> dashboardData = new HashMap<>();
             
             try {
+                // Get patient details first
+                PatientDAO patientDAO = new PatientDAO(connHolder[0]);
+                Patient patient = patientDAO.getPatient(personalHealthNo);
+                dashboardData.put("patient", patient);  // Added this line
+                
                 // Get recent medical records (limited to 3)
                 MedicalRecordDAO medicalRecordDAO = new MedicalRecordDAO(connHolder[0]);
-                List<MedicalRecord> recentRecords = medicalRecordDAO.getRecentRecords(personalHealthNo, 3); // Changed to 3
+                List<MedicalRecord> recentRecords = medicalRecordDAO.getRecentRecords(personalHealthNo, 3);
                 
                 // Get upcoming appointments (limited to 3)
                 AppointmentDAO appointmentDAO = new AppointmentDAO();
                 Vector<Appointment> upcomingAppointments = appointmentDAO.getUpcomingAppointmentsForPatient(personalHealthNo);
                 
-                // Format the data
+                // Format the records to match frontend expectations
                 List<Map<String, Object>> formattedRecords = recentRecords.stream()
                     .map(record -> {
                         Map<String, Object> formatted = new HashMap<>();
                         formatted.put("type", record.getType());
-                        formatted.put("date", record.getDateOfVisit());
+                        formatted.put("date", record.getDateOfVisit().toString());
                         formatted.put("description", record.getSummary());
                         return formatted;
                     })
                     .collect(Collectors.toList());
-                    
+                
+                // Format the appointments to match frontend expectations
                 List<Map<String, Object>> formattedAppointments = upcomingAppointments.stream()
-                    .limit(3)  // Limit to 3 appointments
+                    .limit(3)
                     .map(appointment -> {
                         Map<String, Object> formatted = new HashMap<>();
                         formatted.put("purpose", appointment.getPurpose());
-                        formatted.put("date", appointment.getAppointmentDate());
-                        formatted.put("time", appointment.getAppointmentTime());
-                        formatted.put("status", appointment.getStatus());
+                        formatted.put("date", appointment.getAppointmentDate().toString());
+                        formatted.put("time", appointment.getAppointmentTime().toString());
+                        formatted.put("status", appointment.getStatus().toLowerCase());  // Ensure status is lowercase
                         return formatted;
                     })
                     .collect(Collectors.toList());
@@ -2882,6 +2842,7 @@ public class Main {
                 return gson.toJson(dashboardData);
                 
             } catch (SQLException e) {
+                e.printStackTrace();
                 res.status(500);
                 return gson.toJson(new ApiResponse("error", "Database error: " + e.getMessage()));
             }

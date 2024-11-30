@@ -68,9 +68,9 @@ function PatientDashboard() {
 
         try {
             console.log('Fetching dashboard data for:', user.userIdentifier);
-            const data = await getPatientDashboard(user.userIdentifier);
-            console.log('Dashboard data received:', data);
-            setDashboardData(data);
+            const response = await api.get(`/api/patient/dashboard/summary/${user.userIdentifier}`);
+            console.log('Dashboard data received:', response.data);
+            setDashboardData(response.data);
             setError(null);
         } catch (err) {
             console.error('Error fetching dashboard data:', err);
@@ -170,7 +170,7 @@ function PatientDashboard() {
                             icon={FileText}
                             title="Medical Records"
                             description="View your complete medical history"
-                            onClick={() => navigate('/patient/medical-records')}
+                            onClick={() => navigate('/medical-records')}
                         />
                         <QuickAccessCard 
                             icon={Upload}
@@ -189,25 +189,79 @@ function PatientDashboard() {
                     {/* Recent Activity */}
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
                         <div className="bg-white rounded-lg shadow-md p-6">
-                            <h2 className="text-xl font-semibold mb-4">Recent Medical Records</h2>
-                            {dashboardData?.recentRecords?.length > 0 ? (
-                                <div className="space-y-4">
-                                    {dashboardData.recentRecords.map((record, index) => (
-                                        <div key={index} className="border-b pb-4">
-                                            <p className="font-medium">{record.type}</p>
-                                            <p className="text-sm text-gray-600">{record.date}</p>
-                                            <p className="text-sm text-gray-600">{record.description}</p>
-                                        </div>
-                                    ))}
-                                </div>
-                            ) : (
-                                <p className="text-gray-600">No recent medical records</p>
-                            )}
+                            <div className="flex justify-between items-center mb-4">
+                                <h2 className="text-xl font-semibold">Recent Medical Records</h2>
+                                <button 
+                                    onClick={() => navigate('/medical-records')}
+                                    className="text-sm text-blue-600 hover:text-blue-800"
+                                >
+                                    View All
+                                </button>
+                            </div>
+                            <div className="overflow-y-auto" style={{ height: '200px' }}>
+                                {dashboardData?.recentRecords?.length > 0 ? (
+                                    <div className="space-y-4">
+                                        {dashboardData.recentRecords.map((record, index) => (
+                                            <div key={index} className="border-b pb-4 last:border-b-0">
+                                                <div className="flex justify-between items-start">
+                                                    <div>
+                                                        <p className="font-medium">{record.type}</p>
+                                                        <p className="text-sm text-gray-600">
+                                                            {new Date(record.date).toLocaleDateString()}
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                                <p className="text-sm text-gray-600 mt-2 line-clamp-2">{record.description}</p>
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <p className="text-gray-600 text-center">No recent medical records</p>
+                                )}
+                            </div>
                         </div>
 
                         <div className="bg-white rounded-lg shadow-md p-6">
-                            <h2 className="text-xl font-semibold mb-4">Upcoming Appointments</h2>
-                            <p className="text-gray-600">No upcoming appointments</p>
+                            <div className="flex justify-between items-center mb-4">
+                                <h2 className="text-xl font-semibold">Upcoming Appointments</h2>
+                                <button 
+                                    onClick={() => navigate('/patient/appointments')}
+                                    className="text-sm text-blue-600 hover:text-blue-800"
+                                >
+                                    View All
+                                </button>
+                            </div>
+                            <div className="overflow-y-auto" style={{ height: '200px' }}>
+                                {dashboardData?.upcomingAppointments?.length > 0 ? (
+                                    <div className="space-y-4">
+                                        {dashboardData.upcomingAppointments.map((appointment, index) => (
+                                            <div key={index} className="border-b pb-4 last:border-b-0">
+                                                <div className="flex justify-between items-start">
+                                                    <div>
+                                                        <p className="font-medium">{appointment.purpose}</p>
+                                                        <p className="text-sm text-gray-600">
+                                                            {new Date(appointment.date).toLocaleDateString()} at{' '}
+                                                            {new Date(`1970-01-01T${appointment.time}`).toLocaleTimeString([], {
+                                                                hour: '2-digit',
+                                                                minute: '2-digit'
+                                                            })}
+                                                        </p>
+                                                    </div>
+                                                    <span className={`px-2 py-1 text-xs rounded-full ${
+                                                        appointment.status === 'confirmed' 
+                                                            ? 'bg-green-100 text-green-800'
+                                                            : 'bg-yellow-100 text-yellow-800'
+                                                    }`}>
+                                                        {appointment.status}
+                                                    </span>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <p className="text-gray-600 text-center">No upcoming appointments</p>
+                                )}
+                            </div>
                         </div>
                     </div>
 

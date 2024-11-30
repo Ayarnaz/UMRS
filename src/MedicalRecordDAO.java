@@ -349,41 +349,41 @@ public class MedicalRecordDAO {
         return record;
     }
 
-    public List<MedicalRecord> getRecordsByPHN(String personalHealthNo) {
+    public List<MedicalRecord> getRecordsByPHN(String personalHealthNo) throws SQLException {
         List<MedicalRecord> records = new ArrayList<>();
-        String sql = "SELECT * FROM Medical_Record WHERE Personal_Health_No = ? " +
-                     "ORDER BY Date_of_Visit DESC";
+        String sql = """
+            SELECT * FROM Medical_Record 
+            WHERE Personal_Health_No = ? 
+            ORDER BY Record_ID DESC
+        """;
         
-        try {
-            // Force a transaction read
-            conn.setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);
+        System.out.println("Executing query for PHN: " + personalHealthNo);
+        
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, personalHealthNo);
             
-            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-                pstmt.setString(1, personalHealthNo);
-                pstmt.setFetchDirection(ResultSet.FETCH_FORWARD);
-                ResultSet rs = pstmt.executeQuery();
-                
+            try (ResultSet rs = pstmt.executeQuery()) {
                 while (rs.next()) {
                     MedicalRecord record = new MedicalRecord();
                     record.setRecordId(rs.getInt("Record_ID"));
                     record.setPersonalHealthNo(rs.getString("Personal_Health_No"));
-                    record.setType(rs.getString("Type"));
                     record.setSlmcNo(rs.getString("SLMC_No"));
-                    record.setSummary(rs.getString("Summary"));
+                    record.setHealthInstituteNumber(rs.getString("Health_Institute_Number"));
+                    record.setDateOfVisit(rs.getDate("Date_of_Visit") != null ? 
+                        rs.getDate("Date_of_Visit").toLocalDate() : null);
                     record.setDiagnosis(rs.getString("Diagnosis"));
                     record.setTreatment(rs.getString("Treatment"));
                     record.setNotes(rs.getString("Notes"));
-                    record.setDateOfVisit(rs.getDate("Date_of_Visit").toLocalDate());
+                    record.setType(rs.getString("Type"));
+                    record.setSummary(rs.getString("Summary"));
                     
-                    System.out.println("DEBUG: Found record ID: " + record.getRecordId());
+                    System.out.println("Found record: ID=" + record.getRecordId());
                     records.add(record);
                 }
             }
-        } catch (SQLException e) {
-            System.err.println("SQL Error: " + e.getMessage());
-            e.printStackTrace();
         }
         
+        System.out.println("Total records found: " + records.size());
         return records;
     }
 
@@ -420,20 +420,26 @@ public class MedicalRecordDAO {
 
     public List<MedicalRecord> getRecentPrescriptions(String personalHealthNo) {
         List<MedicalRecord> prescriptions = new ArrayList<>();
-        String sql = "SELECT * FROM Medical_Record " +
-                    "WHERE Personal_Health_No = ? " +
-                    "AND Type = 'prescription' " +
-                    "ORDER BY Date_of_Visit DESC " +
-                    "LIMIT 5";
+        String sql = """
+            SELECT * FROM Medical_Record 
+            WHERE Personal_Health_No = ? 
+            AND Type LIKE '%prescription%' 
+            ORDER BY Date_of_Visit DESC 
+            LIMIT 5
+        """;
 
         try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setString(1, personalHealthNo);
+            System.out.println("Executing prescription query for PHN: " + personalHealthNo); // Debug log
+            
             ResultSet rs = pstmt.executeQuery();
-
             while (rs.next()) {
                 MedicalRecord record = createMedicalRecordFromResultSet(rs);
+                System.out.println("Found prescription record: " + record.getType()); // Debug log
                 prescriptions.add(record);
             }
+            
+            System.out.println("Total prescriptions found: " + prescriptions.size()); // Debug log
         } catch (SQLException e) {
             System.err.println("Error getting recent prescriptions: " + e.getMessage());
             e.printStackTrace();
@@ -596,5 +602,34 @@ public class MedicalRecordDAO {
         
         System.out.println("Total records found: " + records.size());
         return records;
+    }
+
+    public List<MedicalRecord> getRecentDiagnoses(String personalHealthNo) {
+        List<MedicalRecord> diagnoses = new ArrayList<>();
+        String sql = """
+            SELECT * FROM Medical_Record 
+            WHERE Personal_Health_No = ? 
+            AND Type LIKE '%diagnosis%' 
+            ORDER BY Date_of_Visit DESC 
+            LIMIT 5
+        """;
+
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, personalHealthNo);
+            System.out.println("Executing diagnosis query for PHN: " + personalHealthNo); // Debug log
+            
+            ResultSet rs = pstmt.executeQuery();
+            while (rs.next()) {
+                MedicalRecord record = createMedicalRecordFromResultSet(rs);
+                System.out.println("Found diagnosis record: " + record.getType()); // Debug log
+                diagnoses.add(record);
+            }
+            
+            System.out.println("Total diagnoses found: " + diagnoses.size()); // Debug log
+        } catch (SQLException e) {
+            System.err.println("Error getting recent diagnoses: " + e.getMessage());
+            e.printStackTrace();
+        }
+        return diagnoses;
     }
 }

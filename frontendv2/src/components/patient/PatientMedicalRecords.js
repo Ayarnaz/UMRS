@@ -175,10 +175,81 @@ function PatientMedicalRecords() {
     }
   }, [user?.userIdentifier]);
 
+  const fetchRecentPrescription = useCallback(async () => {
+    if (!user?.userIdentifier) {
+        console.log('No user identifier available for prescription fetch');
+        return;
+    }
+
+    try {
+        console.log('Fetching prescriptions for PHN:', user.userIdentifier);
+        const response = await api.get(`/api/patient/recent-prescription?personalHealthNo=${user.userIdentifier}`);
+        console.log('Prescription API response:', response.data);
+
+        if (response.data && response.data.length > 0) {
+            const prescription = response.data[0];
+            console.log('Processing prescription:', prescription);
+            
+            const formattedPrescription = {
+                date: prescription.dateOfVisit,
+                medication: prescription.treatment,    // Changed from diagnosis to treatment
+                dosage: prescription.diagnosis,        // Changed from treatment to diagnosis
+                instructions: prescription.notes,
+                doctorName: prescription.slmcNo
+            };
+            
+            console.log('Formatted prescription:', formattedPrescription);
+            setRecentPrescription(formattedPrescription);
+        } else {
+            console.log('No prescription data received');
+            setRecentPrescription(null);
+        }
+    } catch (error) {
+        console.error('Error fetching recent prescription:', error);
+        setRecentPrescription(null);
+    }
+}, [user?.userIdentifier]);
+
+  const fetchRecentDiagnosis = useCallback(async () => {
+    if (!user?.userIdentifier) {
+        console.log('No user identifier available for diagnosis fetch');
+        return;
+    }
+
+    try {
+        console.log('Fetching diagnoses for PHN:', user.userIdentifier);
+        const response = await api.get(`/api/patient/recent-diagnosis?personalHealthNo=${user.userIdentifier}`);
+        console.log('Diagnosis API response:', response.data);
+
+        if (response.data && response.data.length > 0) {
+            const diagnosis = response.data[0];
+            console.log('Processing diagnosis:', diagnosis);
+            
+            const formattedDiagnosis = {
+                date: diagnosis.dateOfVisit,
+                condition: diagnosis.diagnosis,
+                details: diagnosis.treatment,
+                doctorName: diagnosis.slmcNo
+            };
+            
+            console.log('Formatted diagnosis:', formattedDiagnosis);
+            setRecentDiagnosis(formattedDiagnosis);
+        } else {
+            console.log('No diagnosis data received');
+            setRecentDiagnosis(null);
+        }
+    } catch (error) {
+        console.error('Error fetching recent diagnosis:', error);
+        setRecentDiagnosis(null);
+    }
+}, [user?.userIdentifier]);
+
   useEffect(() => {
     fetchData();
     fetchDocuments();
-  }, [fetchData, fetchDocuments]);
+    fetchRecentPrescription();
+    fetchRecentDiagnosis();
+  }, [fetchData, fetchDocuments, fetchRecentPrescription, fetchRecentDiagnosis]);
 
   // Loading state with timeout
   const [showLoading, setShowLoading] = useState(false);

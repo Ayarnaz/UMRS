@@ -44,6 +44,13 @@ import com.zaxxer.hikari.HikariDataSource;
 import java.util.TimeZone;
 import com.google.gson.ExclusionStrategy;
 import com.google.gson.FieldAttributes;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
+import java.text.ParseException;
+
+
 
 
 //javac --enable-preview --release 23 -cp "lib/*" -d bin src/*.java > server.log 2>&1
@@ -518,8 +525,8 @@ public class Main {
         get("/api/patient/recent-prescription", (req, res) -> {
             String personalHealthNo = req.queryParams("personalHealthNo");
             MedicalRecordDAO medicalRecordDAO = new MedicalRecordDAO(connHolder[0]);
-            MedicalRecord recentPrescription = medicalRecordDAO.getRecentRecordByType(personalHealthNo, "Prescription");
-            return gson.toJson(recentPrescription);
+            List<MedicalRecord> prescriptions = medicalRecordDAO.getRecentPrescriptions(personalHealthNo);
+            return gson.toJson(prescriptions);
         });
 
         get("/api/patient/activities", (req, res) -> {
@@ -577,8 +584,8 @@ public class Main {
         // API endpoint to get recent diagnosis from medical records
         get("/api/patient/recent-diagnosis", (req, res) -> {
             String personalHealthNo = req.queryParams("personalHealthNo");
-            MedicalRecordDAO recordDAO = new MedicalRecordDAO(connHolder[0]);
-            List<MedicalRecord> diagnoses = recordDAO.getRecordsByType(personalHealthNo, "Diagnosis");
+            MedicalRecordDAO medicalRecordDAO = new MedicalRecordDAO(connHolder[0]);
+            List<MedicalRecord> diagnoses = medicalRecordDAO.getRecentDiagnoses(personalHealthNo);
             return gson.toJson(diagnoses);
         });
 
@@ -600,34 +607,55 @@ public class Main {
         // Add this new route for creating medical records
         post("/api/patient/medical-records", (req, res) -> {
             res.type("application/json");
+            System.out.println("Inserting medical record from patient portal");
+            
             try {
-                JsonObject jsonRequest = JsonParser.parseString(req.body()).getAsJsonObject();
+                String requestBody = req.body();
+                MedicalRecord record = gson.fromJson(requestBody, MedicalRecord.class);
+                System.out.println("Inserting medical record with PHN: " + record.getPersonalHealthNo());
                 
-                // Extract and validate PHN
-                String personalHealthNo = getStringFromJson(jsonRequest, "personalHealthNo");
-                if (personalHealthNo == null || personalHealthNo.isEmpty()) {
-                    res.status(400);
-                    return gson.toJson(new ApiResponse("error", "Personal Health Number is required"));
+                // Get a fresh connection from the pool
+                try (Connection conn = getConnection()) {
+                    // Set timeout and isolation level
+                    try (Statement stmt = conn.createStatement()) {
+                        stmt.execute("PRAGMA busy_timeout = 60000");  // 60 second timeout
+                        stmt.execute("PRAGMA journal_mode = WAL");
+                    }
+                    
+                    conn.setTransactionIsolation(Connection.TRANSACTION_SERIALIZABLE);
+                    conn.setAutoCommit(false);
+                    
+                    // Create DAO with this connection
+                    MedicalRecordDAO recordDAO = new MedicalRecordDAO(conn);
+                    
+                    // Insert with retry logic
+                    int maxRetries = 3;
+                    int retryCount = 0;
+                    boolean success = false;
+                    
+                    while (!success && retryCount < maxRetries) {
+                        try {
+                            recordDAO.insertMedicalRecord(record);
+                            conn.commit();
+                            success = true;
+                        } catch (SQLException e) {
+                            if (e.getMessage().contains("database is locked") && retryCount < maxRetries - 1) {
+                                System.out.println("Database locked, retrying... (attempt " + (retryCount + 1) + ")");
+                                retryCount++;
+                                Thread.sleep(1000); // Wait 1 second before retrying
+                                conn.rollback();
+                            } else {
+                                throw e;
+                            }
+                        }
+                    }
+                    
+                    if (success) {
+                        return gson.toJson(new ApiResponse("success", "Record added successfully"));
+                    } else {
+                        throw new SQLException("Failed to insert record after " + maxRetries + " attempts");
+                    }
                 }
-
-                MedicalRecord record = new MedicalRecord();
-                record.setPersonalHealthNo(personalHealthNo);
-                record.setSlmcNo(getStringFromJson(jsonRequest, "slmcNo"));
-                record.setHealthInstituteNumber(getStringFromJson(jsonRequest, "healthInstituteNumber"));
-                record.setDateOfVisit(LocalDate.parse(getStringFromJson(jsonRequest, "dateOfVisit")));
-                record.setDiagnosis(getStringFromJson(jsonRequest, "diagnosis"));
-                record.setTreatment(getStringFromJson(jsonRequest, "treatment"));
-                record.setNotes(getStringFromJson(jsonRequest, "notes"));
-                record.setType(getStringFromJson(jsonRequest, "type"));
-                record.setSummary(getStringFromJson(jsonRequest, "summary"));
-
-                // Log the record data before insertion
-                System.out.println("Inserting medical record with PHN: " + personalHealthNo);
-
-                MedicalRecordDAO recordDAO = new MedicalRecordDAO(connHolder[0]);
-                recordDAO.insertMedicalRecord(record);
-
-                return gson.toJson(new ApiResponse("success", "Medical record created successfully", Integer.valueOf(record.getRecordId())));
             } catch (Exception e) {
                 e.printStackTrace();
                 res.status(500);
@@ -786,39 +814,30 @@ public class Main {
                 return gson.toJson(new ApiResponse("error", "Personal Health Number is required"));
             }
 
-            System.out.println("Processing request for patient records - PHN: " + phn);
+            System.out.println("\n=== Fetching Patient Records ===");
+            System.out.println("PHN: " + phn);
             
             try (Connection conn = getConnection()) {
-                // Configure connection for immediate reads
                 conn.setAutoCommit(false);
-                conn.setTransactionIsolation(Connection.TRANSACTION_SERIALIZABLE);
+                conn.setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);
                 
-                try (Statement stmt = conn.createStatement()) {
-                    // Force immediate synchronization
-                    stmt.execute("PRAGMA synchronous = FULL");
-                    stmt.execute("PRAGMA journal_mode = WAL");
-                    stmt.execute("PRAGMA wal_checkpoint(FULL)");
-                    stmt.execute("PRAGMA cache_size = 0");
-                    stmt.execute("PRAGMA read_uncommitted = 0");
-                }
-
+                // Get all records including newly added ones
                 MedicalRecordDAO recordDAO = new MedicalRecordDAO(conn);
-                List<MedicalRecord> records = recordDAO.getAllRecordsByPHN(phn);
-                
-                // Ensure all changes are committed
+                List<MedicalRecord> allRecords = recordDAO.getRecordsByPHN(phn); // Using the same method name pattern
+                System.out.println("Retrieved " + allRecords.size() + " total records");
+
                 conn.commit();
                 
                 Map<String, Object> response = new HashMap<>();
-                response.put("medicalRecords", records);
-                System.out.println("Returning " + records.size() + " records for PHN: " + phn);
+                response.put("medicalRecords", allRecords);
                 
                 return gson.toJson(response);
 
             } catch (Exception e) {
-                System.err.println("Error processing patient records request: " + e.getMessage());
+                System.err.println("Error fetching patient records: " + e.getMessage());
                 e.printStackTrace();
                 res.status(500);
-                return gson.toJson(new ApiResponse("error", "Failed to fetch records: " + e.getMessage()));
+                return gson.toJson(new ApiResponse("error", "Failed to fetch records"));
             }
         });
 
@@ -1008,25 +1027,39 @@ public class Main {
             try {
                 JsonObject jsonRequest = JsonParser.parseString(req.body()).getAsJsonObject();
                 
+                // Parse the appointment data with proper date handling
                 Appointment appointment = new Appointment();
                 appointment.setPersonalHealthNo(jsonRequest.get("personalHealthNo").getAsString());
                 appointment.setSlmcNo(jsonRequest.get("slmcNo").getAsString());
-                appointment.setHealthInstituteNumber(jsonRequest.get("healthInstituteNumber").getAsString());
+                appointment.setHealthInstituteNumber(
+                    jsonRequest.has("healthInstituteNumber") ? 
+                    jsonRequest.get("healthInstituteNumber").getAsString() : ""
+                );
                 
                 // Parse date and time
-                String dateStr = jsonRequest.get("appointmentDate").getAsString();
-                String timeStr = jsonRequest.get("appointmentTime").getAsString();
-                appointment.setAppointmentDate(java.sql.Date.valueOf(dateStr));
-                appointment.setAppointmentTime(java.sql.Time.valueOf(timeStr + ":00")); // Add seconds
+                SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd");
+                SimpleDateFormat timeFormat = new SimpleDateFormat("HH:mm");
+                
+                java.util.Date parsedDate = dateFormat.parse(jsonRequest.get("appointmentDate").getAsString());
+                java.util.Date parsedTime = timeFormat.parse(jsonRequest.get("appointmentTime").getAsString());
+                
+                appointment.setAppointmentDate(new java.sql.Date(parsedDate.getTime()));
+                appointment.setAppointmentTime(new java.sql.Time(parsedTime.getTime()));
                 
                 appointment.setPurpose(jsonRequest.get("purpose").getAsString());
-                appointment.setStatus(jsonRequest.get("status").getAsString());
-                appointment.setNotes(jsonRequest.has("notes") ? jsonRequest.get("notes").getAsString() : "");
+                appointment.setStatus("Pending"); // Default status for patient appointments
+                appointment.setNotes(
+                    jsonRequest.has("notes") ? 
+                    jsonRequest.get("notes").getAsString() : ""
+                );
                 
-                AppointmentDAO appointmentDAO = new AppointmentDAO(connHolder[0]);
+                AppointmentDAO appointmentDAO = new AppointmentDAO();
                 appointmentDAO.insertAppointment(appointment);
                 
                 return gson.toJson(new ApiResponse("success", "Appointment created successfully"));
+            } catch (ParseException e) {
+                res.status(400);
+                return gson.toJson(new ApiResponse("error", "Invalid date format: " + e.getMessage()));
             } catch (Exception e) {
                 e.printStackTrace();
                 res.status(500);
@@ -1034,83 +1067,114 @@ public class Main {
             }
         });
 
-        put("/api/patient/appointments/:id", (req, res) -> {
+        // Professional appointment endpoint
+        post("/api/professional/appointments", (req, res) -> {
             res.type("application/json");
             try {
-                int id = Integer.parseInt(req.params(":id"));
                 JsonObject jsonRequest = JsonParser.parseString(req.body()).getAsJsonObject();
                 
+                // Validate required fields
+                String[] requiredFields = {"patientPHN", "slmcNo", "appointmentDate", "appointmentTime", "purpose"};
+                for (String field : requiredFields) {
+                    if (!jsonRequest.has(field) || jsonRequest.get(field).getAsString().trim().isEmpty()) {
+                        res.status(400);
+                        return gson.toJson(new ApiResponse("error", "Missing required field: " + field));
+                    }
+                }
+
                 Appointment appointment = new Appointment();
-                appointment.setAppointmentID(id);
-                appointment.setPersonalHealthNo(jsonRequest.get("personalHealthNo").getAsString());
+                appointment.setPersonalHealthNo(jsonRequest.get("patientPHN").getAsString());
                 appointment.setSlmcNo(jsonRequest.get("slmcNo").getAsString());
-                appointment.setHealthInstituteNumber(jsonRequest.get("healthInstituteNumber").getAsString());
                 
                 // Parse date and time
-                String dateStr = jsonRequest.get("appointmentDate").getAsString();
-                String timeStr = jsonRequest.get("appointmentTime").getAsString();
-                appointment.setAppointmentDate(java.sql.Date.valueOf(dateStr));
-                appointment.setAppointmentTime(java.sql.Time.valueOf(timeStr + ":00")); // Add seconds
+                SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd");
+                SimpleDateFormat timeFormat = new SimpleDateFormat("HH:mm");
+                
+                java.util.Date parsedDate = dateFormat.parse(jsonRequest.get("appointmentDate").getAsString());  // Removed extra parenthesis
+                java.util.Date parsedTime = timeFormat.parse(jsonRequest.get("appointmentTime").getAsString());  // Removed extra parenthesis
+                
+                appointment.setAppointmentDate(new java.sql.Date(parsedDate.getTime()));
+                appointment.setAppointmentTime(new java.sql.Time(parsedTime.getTime()));
                 
                 appointment.setPurpose(jsonRequest.get("purpose").getAsString());
-                appointment.setStatus(jsonRequest.get("status").getAsString());
-                appointment.setNotes(jsonRequest.has("notes") ? jsonRequest.get("notes").getAsString() : "");
+                appointment.setStatus("Scheduled"); // Professional-created appointments are automatically scheduled
+                appointment.setNotes(
+                    jsonRequest.has("notes") ? 
+                    jsonRequest.get("notes").getAsString() : ""
+                );
+                appointment.setHealthInstituteNumber(
+                    jsonRequest.has("healthInstituteNumber") ? 
+                    jsonRequest.get("healthInstituteNumber").getAsString() : ""
+                );
 
-                AppointmentDAO appointmentDAO = new AppointmentDAO(connHolder[0]);
-                appointmentDAO.updateAppointment(appointment);
+                AppointmentDAO appointmentDAO = new AppointmentDAO();
+                appointmentDAO.insertAppointment(appointment);
                 
-                return gson.toJson(new ApiResponse("success", "Appointment updated successfully"));
+                return gson.toJson(new ApiResponse("success", "Appointment created successfully"));
+            } catch (ParseException e) {
+                res.status(400);
+                return gson.toJson(new ApiResponse("error", "Invalid date format: " + e.getMessage()));
             } catch (Exception e) {
                 e.printStackTrace();
                 res.status(500);
-                return gson.toJson(new ApiResponse("error", "Failed to update appointment: " + e.getMessage()));
+                return gson.toJson(new ApiResponse("error", "Failed to create appointment: " + e.getMessage()));
+            }
+        });
+
+        // Update appointment status endpoint
+        put("/api/appointments/:id/status", (req, res) -> {
+            res.type("application/json");
+            try {
+                int appointmentId = Integer.parseInt(req.params(":id"));
+                JsonObject jsonRequest = JsonParser.parseString(req.body()).getAsJsonObject();
+                String status = jsonRequest.get("status").getAsString();
+                
+                AppointmentDAO appointmentDAO = new AppointmentDAO();
+                Appointment appointment = appointmentDAO.getAppointmentById(appointmentId);
+                
+                if (appointment != null) {
+                    appointment.setStatus(status);
+                    appointmentDAO.updateAppointment(appointment);
+                    return gson.toJson(new ApiResponse("success", "Appointment status updated successfully"));
+                } else {
+                    res.status(404);
+                    return gson.toJson(new ApiResponse("error", "Appointment not found"));
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", "Failed to update appointment status: " + e.getMessage()));
             }
         });
 
         // Add a GET endpoint to fetch appointments
         get("/api/patient/appointments/list", (req, res) -> {
             res.type("application/json");
-            
-            // Debug incoming request
-            System.out.println("\n=== Appointment Request Debug ===");
-            System.out.println("Request URL: " + req.url());
-            System.out.println("Query String: " + req.queryString());
-            System.out.println("Raw params: " + req.raw().getParameterMap());
-            
-            // Get the personalHealthNo from query parameters
             String personalHealthNo = req.queryParams("personalHealthNo");
-            System.out.println("Extracted PHN: " + personalHealthNo);
             
             if (personalHealthNo == null || personalHealthNo.isEmpty()) {
                 res.status(400);
                 return gson.toJson(new ApiResponse("error", "Personal Health Number is required"));
             }
 
-            try (Connection conn = getConnection()) {
-                AppointmentDAO appointmentDAO = new AppointmentDAO(conn);
-                Vector<Appointment> appointments = appointmentDAO.getAppointmentsByPatient(personalHealthNo);
-                
-                List<Map<String, Object>> formattedAppointments = new ArrayList<>();
-                for (Appointment apt : appointments) {
-                    Map<String, Object> formattedApt = new HashMap<>();
-                    formattedApt.put("id", apt.getAppointmentID());
-                    formattedApt.put("appointmentDate", apt.getAppointmentDate().toString());
-                    formattedApt.put("appointmentTime", apt.getAppointmentTime().toString());
-                    formattedApt.put("purpose", apt.getPurpose());
-                    formattedApt.put("status", apt.getStatus());
-                    formattedApt.put("notes", apt.getNotes());
-                    formattedApt.put("slmcNo", apt.getSlmcNo());
-                    formattedApt.put("healthInstituteNumber", apt.getHealthInstituteNumber());
-                    formattedAppointments.add(formattedApt);
-                }
-                
-                return gson.toJson(formattedAppointments);
-            } catch (SQLException e) {
-                System.err.println("Database error: " + e.getMessage());
-                e.printStackTrace();
-                res.status(500);
-                return gson.toJson(new ApiResponse("error", "Database error: " + e.getMessage()));
+            AppointmentDAO appointmentDAO = new AppointmentDAO();
+            Vector<Appointment> appointments = appointmentDAO.getAppointmentsByPatient(personalHealthNo);
+            
+            List<Map<String, Object>> formattedAppointments = new ArrayList<>();
+            for (Appointment apt : appointments) {
+                Map<String, Object> formattedApt = new HashMap<>();
+                formattedApt.put("id", apt.getAppointmentID());
+                formattedApt.put("appointmentDate", apt.getAppointmentDate().toString());
+                formattedApt.put("appointmentTime", apt.getAppointmentTime().toString());
+                formattedApt.put("purpose", apt.getPurpose());
+                formattedApt.put("status", apt.getStatus());
+                formattedApt.put("notes", apt.getNotes());
+                formattedApt.put("slmcNo", apt.getSlmcNo());
+                formattedApt.put("healthInstituteNumber", apt.getHealthInstituteNumber());
+                formattedAppointments.add(formattedApt);
             }
+            
+            return gson.toJson(formattedAppointments);
         });
 
         // Add this endpoint to check appointments directly
@@ -1726,7 +1790,7 @@ public class Main {
                     return gson.toJson(new ApiResponse("error", "SLMC number is required"));
                 }
 
-                AppointmentDAO appointmentDAO = new AppointmentDAO(connHolder[0]);
+                AppointmentDAO appointmentDAO = new AppointmentDAO();
                 Vector<Appointment> requests = appointmentDAO.getPendingAppointments(slmcNo);
                 return gson.toJson(requests);
             } catch (Exception e) {
@@ -1744,8 +1808,7 @@ public class Main {
                 // Validate required fields
                 String[] requiredFields = {"patientPHN", "slmcNo", "appointmentDate", "appointmentTime", "purpose"};
                 for (String field : requiredFields) {
-                    if (!jsonRequest.has(field) || jsonRequest.get(field) == null || 
-                        jsonRequest.get(field).getAsString().trim().isEmpty()) {
+                    if (!jsonRequest.has(field) || jsonRequest.get(field).getAsString().trim().isEmpty()) {
                         res.status(400);
                         return gson.toJson(new ApiResponse("error", "Missing required field: " + field));
                     }
@@ -1754,26 +1817,35 @@ public class Main {
                 Appointment appointment = new Appointment();
                 appointment.setPersonalHealthNo(jsonRequest.get("patientPHN").getAsString());
                 appointment.setSlmcNo(jsonRequest.get("slmcNo").getAsString());
-                appointment.setHealthInstituteNumber(
-                    jsonRequest.has("healthInstituteNumber") ? 
-                    jsonRequest.get("healthInstituteNumber").getAsString() : ""
-                );
-                appointment.setAppointmentDate(java.sql.Date.valueOf(jsonRequest.get("appointmentDate").getAsString()));
-                appointment.setAppointmentTime(java.sql.Time.valueOf(jsonRequest.get("appointmentTime").getAsString() + ":00"));
+                
+                // Parse date and time
+                SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd");
+                SimpleDateFormat timeFormat = new SimpleDateFormat("HH:mm");
+                
+                java.util.Date parsedDate = dateFormat.parse(jsonRequest.get("appointmentDate").getAsString());  // Removed extra parenthesis
+                java.util.Date parsedTime = timeFormat.parse(jsonRequest.get("appointmentTime").getAsString());  // Removed extra parenthesis
+                
+                appointment.setAppointmentDate(new java.sql.Date(parsedDate.getTime()));
+                appointment.setAppointmentTime(new java.sql.Time(parsedTime.getTime()));
+                
                 appointment.setPurpose(jsonRequest.get("purpose").getAsString());
-                appointment.setStatus(
-                    jsonRequest.has("status") ? 
-                    jsonRequest.get("status").getAsString() : "Scheduled"
-                );
+                appointment.setStatus("Scheduled"); // Professional-created appointments are automatically scheduled
                 appointment.setNotes(
                     jsonRequest.has("notes") ? 
                     jsonRequest.get("notes").getAsString() : ""
                 );
+                appointment.setHealthInstituteNumber(
+                    jsonRequest.has("healthInstituteNumber") ? 
+                    jsonRequest.get("healthInstituteNumber").getAsString() : ""
+                );
 
-                AppointmentDAO appointmentDAO = new AppointmentDAO(connHolder[0]);
+                AppointmentDAO appointmentDAO = new AppointmentDAO();
                 appointmentDAO.insertAppointment(appointment);
                 
                 return gson.toJson(new ApiResponse("success", "Appointment created successfully"));
+            } catch (ParseException e) {
+                res.status(400);
+                return gson.toJson(new ApiResponse("error", "Invalid date format: " + e.getMessage()));
             } catch (Exception e) {
                 e.printStackTrace();
                 res.status(500);
@@ -1787,7 +1859,7 @@ public class Main {
                 int appointmentId = Integer.parseInt(req.params(":id"));
                 JsonObject jsonRequest = JsonParser.parseString(req.body()).getAsJsonObject();
                 
-                AppointmentDAO appointmentDAO = new AppointmentDAO(connHolder[0]);
+                AppointmentDAO appointmentDAO = new AppointmentDAO();
                 Appointment appointment = appointmentDAO.getAppointmentById(appointmentId);
                 
                 if (appointment == null) {
@@ -1829,7 +1901,7 @@ public class Main {
                 JsonObject jsonRequest = JsonParser.parseString(req.body()).getAsJsonObject();
                 String status = jsonRequest.get("status").getAsString();
                 
-                AppointmentDAO appointmentDAO = new AppointmentDAO(connHolder[0]);
+                AppointmentDAO appointmentDAO = new AppointmentDAO();
                 Appointment appointment = appointmentDAO.getAppointmentById(appointmentId);
                 
                 if (appointment != null) {
@@ -2269,7 +2341,7 @@ public class Main {
             
             try {
                 Map<String, Object> response = new HashMap<>();
-                AppointmentDAO appointmentDAO = new AppointmentDAO(connHolder[0]);
+                AppointmentDAO appointmentDAO = new AppointmentDAO();
 
                 // Get appointments with joined data
                 String sql = """
@@ -2372,7 +2444,7 @@ public class Main {
             
             appointment.setStatus("scheduled");
             
-            AppointmentDAO appointmentDAO = new AppointmentDAO(connHolder[0]);
+            AppointmentDAO appointmentDAO = new AppointmentDAO();
             appointmentDAO.insertAppointment(appointment);
             
             return gson.toJson(new ApiResponse("success", "Appointment created successfully"));
@@ -2389,7 +2461,7 @@ public class Main {
                 int appointmentId = Integer.parseInt(req.params(":id"));
                 JsonObject jsonRequest = JsonParser.parseString(req.body()).getAsJsonObject();
                 
-                AppointmentDAO appointmentDAO = new AppointmentDAO(connHolder[0]);
+                AppointmentDAO appointmentDAO = new AppointmentDAO();
                 Appointment appointment = appointmentDAO.getAppointmentById(appointmentId);
                 
                 if (appointment == null) {
@@ -2424,7 +2496,7 @@ public class Main {
             res.type("application/json");
             try {
                 int appointmentId = Integer.parseInt(req.params(":id"));
-                AppointmentDAO appointmentDAO = new AppointmentDAO(connHolder[0]);
+                AppointmentDAO appointmentDAO = new AppointmentDAO();
                 appointmentDAO.deleteAppointment(appointmentId);
                 return gson.toJson(new ApiResponse("success", "Appointment deleted successfully"));
             } catch (Exception e) {
@@ -2691,10 +2763,129 @@ public class Main {
                 // Analyze the database for query optimization
                 stmt.execute("ANALYZE");
             }
+            
         } catch (SQLException e) {
             System.err.println("Error optimizing database: " + e.getMessage());
             e.printStackTrace();
         }
+
+        get("/api/professional/analytics", (req, res) -> {
+            res.type("application/json");
+            String slmcNo = req.queryParams("slmcNo");
+            
+            if (slmcNo == null || slmcNo.trim().isEmpty()) {
+                res.status(400);
+                return gson.toJson(new ApiResponse("error", "SLMC number is required"));
+            }
+
+            try (Connection conn = getConnection()) {
+                Map<String, Object> analytics = new HashMap<>();
+                
+                // Get diagnosis distribution (most common conditions)
+                String diagnosisSql = """
+                    SELECT Diagnosis, COUNT(*) as count 
+                    FROM Medical_Record 
+                    WHERE SLMC_No = ? 
+                    GROUP BY Diagnosis 
+                    ORDER BY count DESC 
+                    LIMIT 5
+                """;
+                
+                try (PreparedStatement pstmt = conn.prepareStatement(diagnosisSql)) {
+                    pstmt.setString(1, slmcNo);
+                    ResultSet rs = pstmt.executeQuery();
+                    
+                    List<Map<String, Object>> diagnosisCounts = new ArrayList<>();
+                    while (rs.next()) {
+                        Map<String, Object> item = new HashMap<>();
+                        item.put("diagnosis", rs.getString("Diagnosis"));
+                        item.put("count", rs.getInt("count"));
+                        diagnosisCounts.add(item);
+                    }
+                    analytics.put("commonDiagnoses", diagnosisCounts);
+                }
+                
+                // Get monthly visit counts
+                String visitsSql = """
+                    SELECT strftime('%Y-%m', Date_of_Visit) as month, COUNT(*) as count 
+                    FROM Medical_Record 
+                    WHERE SLMC_No = ? 
+                    GROUP BY month 
+                    ORDER BY month DESC 
+                    LIMIT 6
+                """;
+                
+                try (PreparedStatement pstmt = conn.prepareStatement(visitsSql)) {
+                    pstmt.setString(1, slmcNo);
+                    ResultSet rs = pstmt.executeQuery();
+                    
+                    List<Map<String, Object>> monthlyCounts = new ArrayList<>();
+                    while (rs.next()) {
+                        Map<String, Object> item = new HashMap<>();
+                        item.put("month", rs.getString("month"));
+                        item.put("count", rs.getInt("count"));
+                        monthlyCounts.add(item);
+                    }
+                    analytics.put("monthlyVisits", monthlyCounts);
+                }
+
+                return gson.toJson(analytics);
+
+            } catch (Exception e) {
+                System.err.println("Error generating analytics: " + e.getMessage());
+                e.printStackTrace();
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", "Failed to generate analytics"));
+            }
+        });
+
+        // Change the endpoint path to be more specific
+        get("/api/patient/dashboard/summary/:phn", (req, res) -> {
+            String personalHealthNo = req.params(":phn");
+            Map<String, Object> dashboardData = new HashMap<>();
+            
+            try {
+                // Get recent medical records (limited to 3)
+                MedicalRecordDAO medicalRecordDAO = new MedicalRecordDAO(connHolder[0]);
+                List<MedicalRecord> recentRecords = medicalRecordDAO.getRecentRecords(personalHealthNo, 3); // Changed to 3
+                
+                // Get upcoming appointments (limited to 3)
+                AppointmentDAO appointmentDAO = new AppointmentDAO();
+                Vector<Appointment> upcomingAppointments = appointmentDAO.getUpcomingAppointmentsForPatient(personalHealthNo);
+                
+                // Format the data
+                List<Map<String, Object>> formattedRecords = recentRecords.stream()
+                    .map(record -> {
+                        Map<String, Object> formatted = new HashMap<>();
+                        formatted.put("type", record.getType());
+                        formatted.put("date", record.getDateOfVisit());
+                        formatted.put("description", record.getSummary());
+                        return formatted;
+                    })
+                    .collect(Collectors.toList());
+                    
+                List<Map<String, Object>> formattedAppointments = upcomingAppointments.stream()
+                    .limit(3)  // Limit to 3 appointments
+                    .map(appointment -> {
+                        Map<String, Object> formatted = new HashMap<>();
+                        formatted.put("purpose", appointment.getPurpose());
+                        formatted.put("date", appointment.getAppointmentDate());
+                        formatted.put("time", appointment.getAppointmentTime());
+                        formatted.put("status", appointment.getStatus());
+                        return formatted;
+                    })
+                    .collect(Collectors.toList());
+                
+                dashboardData.put("recentRecords", formattedRecords);
+                dashboardData.put("upcomingAppointments", formattedAppointments);
+                
+                return gson.toJson(dashboardData);
+                
+            } catch (SQLException e) {
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", "Database error: " + e.getMessage()));
+            }
+        });
     }
 
     private static void createIndexes(Connection conn) throws SQLException {

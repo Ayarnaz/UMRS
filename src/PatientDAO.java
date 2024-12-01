@@ -18,12 +18,7 @@ public class PatientDAO {
                      "Phone_Number, Email, Emergency_Contact_Name, Emergency_Contact_Phone, Height, Weight, " +
                      "BMI, Blood_Type, Medical_Conditions) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
-        PreparedStatement pstmt = null;
-        
-        try {
-            this.conn.setAutoCommit(false);  // Start transaction
-            
-            pstmt = this.conn.prepareStatement(sql);
+        try (PreparedStatement pstmt = this.conn.prepareStatement(sql)) {
             pstmt.setString(1, patient.getPersonalHealthNo());
             pstmt.setString(2, patient.getNIC());
             pstmt.setString(3, patient.getName());
@@ -45,21 +40,10 @@ public class PatientDAO {
                 throw new SQLException("Creating patient failed, no rows affected.");
             }
             
-            this.conn.commit();  // Commit transaction
-            System.out.println("Patient committed to database successfully.");
-            
+            System.out.println("Patient record created successfully.");
         } catch (SQLException e) {
-            if (this.conn != null) {
-                try {
-                    this.conn.rollback();  // Rollback on error
-                } catch (SQLException ex) {
-                    ex.printStackTrace();
-                }
-            }
-            throw e;  // Re-throw the exception
-        } finally {
-            if (pstmt != null) pstmt.close();
-            this.conn.setAutoCommit(true);  // Reset auto-commit
+            System.err.println("Error inserting patient: " + e.getMessage());
+            throw e;  // Re-throw to be handled by the transaction
         }
     }
 

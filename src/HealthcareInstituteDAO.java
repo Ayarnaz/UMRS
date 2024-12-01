@@ -3,15 +3,8 @@ import java.sql.*;
 public class HealthcareInstituteDAO {
     private Connection conn;
 
-    public HealthcareInstituteDAO() {
-        // Initialize the connection
-        String url = "jdbc:sqlite:db/umrs.db";
-        try {
-            conn = DriverManager.getConnection(url);
-            //System.out.println("Connected to the database.");
-        } catch (SQLException e) {
-            System.out.println("Connection failed: " + e.getMessage());
-        }
+    public HealthcareInstituteDAO(Connection conn) {
+        this.conn = conn;
     }
 
     // Method to close the connection
@@ -27,7 +20,7 @@ public class HealthcareInstituteDAO {
     }
 
     // Create a new healthcare institute record in the database
-    public void insertHealthcareInstitute(HealthcareInstitute institute) {
+    public void insertHealthcareInstitute(HealthcareInstitute institute) throws SQLException {
         String sql = "INSERT INTO Healthcare_Institute (Health_Institute_Number, Name, Address, Email, Phone_Number, Type) VALUES (?, ?, ?, ?, ?, ?)";
 
         try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
@@ -37,10 +30,12 @@ public class HealthcareInstituteDAO {
             pstmt.setString(4, institute.getEmail());
             pstmt.setString(5, institute.getPhoneNumber());
             pstmt.setString(6, institute.getType());
-            pstmt.executeUpdate();
+            
+            int result = pstmt.executeUpdate();
+            if (result <= 0) {
+                throw new SQLException("Failed to insert healthcare institute");
+            }
             System.out.println("Healthcare Institute inserted successfully.");
-        } catch (SQLException e) {
-            System.out.println(e.getMessage());
         }
     }
 
@@ -98,6 +93,24 @@ public class HealthcareInstituteDAO {
             System.out.println("Healthcare Institute deleted successfully.");
         } catch (SQLException e) {
             System.out.println(e.getMessage());
+        }
+    }
+
+    public int getActiveProfessionalsCount(String instituteNumber) throws SQLException {
+        String sql = "SELECT COUNT(*) FROM Healthcare_Professional WHERE Health_Institute_Number = ?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, instituteNumber);
+            ResultSet rs = pstmt.executeQuery();
+            return rs.next() ? rs.getInt(1) : 0;
+        }
+    }
+
+    public int getActivePatientsCount(String instituteNumber) throws SQLException {
+        String sql = "SELECT COUNT(DISTINCT Patient_PHN) FROM Medical_Record WHERE Health_Institute_Number = ?";
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, instituteNumber);
+            ResultSet rs = pstmt.executeQuery();
+            return rs.next() ? rs.getInt(1) : 0;
         }
     }
 }

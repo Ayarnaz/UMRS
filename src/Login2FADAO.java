@@ -1,8 +1,26 @@
 import java.security.SecureRandom;
 import java.sql.*;
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
 
 public class Login2FADAO {
+    private static HikariDataSource dataSource;
+    private static final int BUSY_TIMEOUT_MS = 30000; // 30 seconds
     private Connection conn;
+
+    static {
+        initializeDataSource();
+    }
+
+    private static void initializeDataSource() {
+        HikariConfig config = new HikariConfig();
+        config.setJdbcUrl("jdbc:sqlite:db/umrs.db");
+        config.setMaximumPoolSize(5);
+        config.setMinimumIdle(1);
+        config.addDataSourceProperty("journal_mode", "WAL");
+        config.addDataSourceProperty("busy_timeout", String.valueOf(BUSY_TIMEOUT_MS));
+        dataSource = new HikariDataSource(config);
+    }
 
     public Login2FADAO(Connection conn) {
         this.conn = conn;
@@ -68,52 +86,48 @@ public class Login2FADAO {
 
     // Signup a new user
     public boolean signup(Login2FA newUser, String portalType) {
-        try {
-            // Debug prints
-            System.out.println("Starting signup process...");
-            System.out.println("User type: " + newUser.getUserType());
-            
-            newUser.setPortalType(portalType);
-            
-            // Simply use the username as the identifier
-            newUser.setUserIdentifier(newUser.getLoginUsername());
-            
-            // Hash the password
-            byte[] salt = new byte[16];
-            SecureRandom random = new SecureRandom();
-            random.nextBytes(salt);
-            String hashedPassword = PasswordUtil.hashPassword(newUser.getLoginPassword(), salt);
-            
-            // Set the hashed password and salt
-            newUser.setLoginPassword(hashedPassword);
-            newUser.setSalt(salt);
-            
-            // Insert into database
-            String sql = "INSERT INTO Login_2FA (User_Type, User_Identifier, Login_Username, " +
-                        "Login_Password, Salt, Portal_Type, TwoFA_Preference) " +
-                        "VALUES (?, ?, ?, ?, ?, ?, ?)";
-            
-            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-                pstmt.setString(1, newUser.getUserType());
-                pstmt.setString(2, newUser.getUserIdentifier());
-                pstmt.setString(3, newUser.getLoginUsername());
-                pstmt.setString(4, newUser.getLoginPassword());
-                pstmt.setBytes(5, newUser.getSalt());
-                pstmt.setString(6, newUser.getPortalType());
-                pstmt.setString(7, newUser.getTwoFAPreference());
+        try (Connection conn = dataSource.getConnection()) {
+            conn.setAutoCommit(false);
+            try {
+                // Set user details
+                newUser.setPortalType(portalType);
+                newUser.setUserIdentifier(newUser.getLoginUsername());
                 
-                int result = pstmt.executeUpdate();
-                System.out.println("Insert result: " + result);
-                return result > 0;
+                // Hash the password
+                byte[] salt = new byte[16];
+                SecureRandom random = new SecureRandom();
+                random.nextBytes(salt);
+                String hashedPassword = PasswordUtil.hashPassword(newUser.getLoginPassword(), salt);
+                
+                // Set the hashed password and salt
+                newUser.setLoginPassword(hashedPassword);
+                newUser.setSalt(salt);
+
+                String sql = "INSERT INTO Login_2FA (User_Type, User_Identifier, Login_Username, " +
+                            "Login_Password, Salt, Portal_Type, TwoFA_Preference) " +
+                            "VALUES (?, ?, ?, ?, ?, ?, ?)";
+
+                try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                    pstmt.setString(1, newUser.getUserType());
+                    pstmt.setString(2, newUser.getUserIdentifier());
+                    pstmt.setString(3, newUser.getLoginUsername());
+                    pstmt.setString(4, newUser.getLoginPassword());
+                    pstmt.setBytes(5, newUser.getSalt());
+                    pstmt.setString(6, newUser.getPortalType());
+                    pstmt.setString(7, newUser.getTwoFAPreference());
+                    
+                    int result = pstmt.executeUpdate();
+                    conn.commit();
+                    return result > 0;
+                }
+            } catch (Exception e) {
+                conn.rollback();
+                System.err.println("Error during signup: " + e.getMessage());
+                throw new RuntimeException("Signup failed: " + e.getMessage(), e);
             }
         } catch (SQLException e) {
-            System.err.println("Database error during signup: " + e.getMessage());
-            e.printStackTrace();
-            return false;
-        } catch (Exception e) {
-            System.err.println("General error during signup: " + e.getMessage());
-            e.printStackTrace();
-            return false;
+            System.err.println("Database error: " + e.getMessage());
+            throw new RuntimeException("Database connection failed: " + e.getMessage(), e);
         }
     }
 

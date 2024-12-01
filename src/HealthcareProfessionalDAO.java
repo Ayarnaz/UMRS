@@ -22,7 +22,7 @@ public class HealthcareProfessionalDAO {
     }
 
     // Create a new healthcare professional record in the database
-    public void insertHealthcareProfessional(HealthcareProfessional professional) {
+    public void insertHealthcareProfessional(HealthcareProfessional professional) throws SQLException {
         String sql = "INSERT INTO Healthcare_Professional (SLMC_No, NIC, Name, Specialty, Phone_Number, Email, Address, Health_Institute_Number, Role) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
         
         try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
@@ -35,10 +35,12 @@ public class HealthcareProfessionalDAO {
             pstmt.setString(7, professional.getAddress());
             pstmt.setString(8, professional.getHealthInstituteNumber());
             pstmt.setString(9, professional.getRole());
-            pstmt.executeUpdate();
+            
+            int result = pstmt.executeUpdate();
+            if (result <= 0) {
+                throw new SQLException("Failed to insert healthcare professional");
+            }
             System.out.println("Healthcare Professional inserted successfully.");
-        } catch (SQLException e) {
-            System.out.println(e.getMessage());
         }
     }
 

@@ -85,49 +85,57 @@ public class Login2FADAO {
     }
 
     // Signup a new user
-    public boolean signup(Login2FA newUser, String portalType) {
-        try (Connection conn = dataSource.getConnection()) {
-            conn.setAutoCommit(false);
-            try {
-                // Set user details
-                newUser.setPortalType(portalType);
-                newUser.setUserIdentifier(newUser.getLoginUsername());
-                
-                // Hash the password
-                byte[] salt = new byte[16];
-                SecureRandom random = new SecureRandom();
-                random.nextBytes(salt);
-                String hashedPassword = PasswordUtil.hashPassword(newUser.getLoginPassword(), salt);
-                
-                // Set the hashed password and salt
-                newUser.setLoginPassword(hashedPassword);
-                newUser.setSalt(salt);
+    public boolean signup(Login2FA newUser, String portalType) throws SQLException {
+        System.out.println("Starting Login2FA signup process...");
+        
+        // Get the raw password BEFORE any modifications
+        String rawPassword = newUser.getLoginPassword();
+        System.out.println("Raw password received for hashing"); // Debug log
+        
+        if (rawPassword == null || rawPassword.trim().isEmpty()) {
+            throw new SQLException("Password cannot be null or empty");
+        }
 
-                String sql = "INSERT INTO Login_2FA (User_Type, User_Identifier, Login_Username, " +
-                            "Login_Password, Salt, Portal_Type, TwoFA_Preference) " +
-                            "VALUES (?, ?, ?, ?, ?, ?, ?)";
+        // Generate salt and hash password
+        byte[] salt = new byte[16];
+        SecureRandom random = new SecureRandom();
+        random.nextBytes(salt);
+        
+        // Debug logs
+        System.out.println("Salt generated, hashing password...");
+        String hashedPassword = PasswordUtil.hashPassword(rawPassword, salt);
+        System.out.println("Password hashed successfully");
+        
+        // Set the hashed password and salt
+        newUser.setLoginPassword(hashedPassword);
+        newUser.setSalt(salt);
+        newUser.setPortalType(portalType);
+        newUser.setUserIdentifier(newUser.getLoginUsername());
 
-                try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-                    pstmt.setString(1, newUser.getUserType());
-                    pstmt.setString(2, newUser.getUserIdentifier());
-                    pstmt.setString(3, newUser.getLoginUsername());
-                    pstmt.setString(4, newUser.getLoginPassword());
-                    pstmt.setBytes(5, newUser.getSalt());
-                    pstmt.setString(6, newUser.getPortalType());
-                    pstmt.setString(7, newUser.getTwoFAPreference());
-                    
-                    int result = pstmt.executeUpdate();
-                    conn.commit();
-                    return result > 0;
-                }
-            } catch (Exception e) {
-                conn.rollback();
-                System.err.println("Error during signup: " + e.getMessage());
-                throw new RuntimeException("Signup failed: " + e.getMessage(), e);
+        String sql = "INSERT INTO Login_2FA (User_Type, User_Identifier, Login_Username, " +
+                    "Login_Password, Salt, Portal_Type, TwoFA_Preference) " +
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)";
+
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, newUser.getUserType());
+            pstmt.setString(2, newUser.getUserIdentifier());
+            pstmt.setString(3, newUser.getLoginUsername());
+            pstmt.setString(4, hashedPassword); // Use the hashed password
+            pstmt.setBytes(5, salt);           // Store the salt
+            pstmt.setString(6, newUser.getPortalType());
+            pstmt.setString(7, newUser.getTwoFAPreference());
+            
+            System.out.println("Executing Login2FA insert with hashed password");
+            int result = pstmt.executeUpdate();
+            
+            if (result > 0) {
+                System.out.println("Login2FA entry created successfully with hashed password");
+                return true;
             }
+            return false;
         } catch (SQLException e) {
-            System.err.println("Database error: " + e.getMessage());
-            throw new RuntimeException("Database connection failed: " + e.getMessage(), e);
+            System.err.println("Error in Login2FA signup: " + e.getMessage());
+            throw e;
         }
     }
 

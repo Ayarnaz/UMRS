@@ -4,7 +4,6 @@ import Modal from '../common/Modal';
 import { useRegistration } from '../../hooks/useRegistration';
 import { instituteValidationRules } from '../../utils/validationRules';
 import { useNotification } from '../../context/NotificationContext';
-import { Button } from '../ui/button';
 
 const initialValues = {
     instituteNumber: '',
@@ -137,21 +136,23 @@ export default function HealthcareInstituteRegistrationModal({ isOpen, onClose }
                     </div>
                 </div>
                 
-                <div className="modal-form-buttons flex justify-end space-x-3 mt-6">
-                    <Button
-                        type="button"
-                        variant="outline"
-                        onClick={onClose}
-                    >
-                        Cancel
-                    </Button>
-                    <Button
+                <div className="modal-form-buttons">
+                    <button
                         type="submit"
                         disabled={isLoading}
-                        className="bg-green-500 hover:bg-green-600"
+                        className="px-6 py-2 bg-green-500 text-white rounded hover:bg-green-600 
+                            focus:outline-none focus:ring-2 focus:ring-green-500 disabled:opacity-50"
                     >
                         {isLoading ? 'Registering...' : 'Register'}
-                    </Button>
+                    </button>
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        className="px-6 py-2 bg-red-500 text-white rounded hover:bg-red-600 
+                            focus:outline-none focus:ring-2 focus:ring-red-500"
+                    >
+                        Cancel
+                    </button>
                 </div>
             </form>
         </Modal>

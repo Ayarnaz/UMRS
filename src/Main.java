@@ -361,22 +361,21 @@ public class Main {
             try {
                 JsonObject jsonBody = gson.fromJson(req.body(), JsonObject.class);
                 System.out.println("Received signup request for " + userType + ": " + jsonBody);
-
-                // Get a single connection for the entire operation
+                
                 conn = dataSource.getConnection();
-                conn.setAutoCommit(false);  // Start transaction
+                conn.setAutoCommit(false);
+                
+                // Create Login2FA object first with password
+                Login2FA login2FA = new Login2FA();
+                login2FA.setUserType(userType);
+                login2FA.setTwoFAPreference(jsonBody.get("twoFAPreference").getAsString());
+                login2FA.setPortalType(userType);
+                login2FA.setLastTwoFACode(generateSecret());
+                login2FA.setLoginPassword(jsonBody.get("password").getAsString());  // Set password early
                 
                 String identifier = null;
                 
                 try {
-                    // First create Login2FA object
-                    Login2FA login2FA = new Login2FA();
-                    login2FA.setUserType(userType);
-                    login2FA.setTwoFAPreference(jsonBody.get("twoFAPreference").getAsString());
-                    login2FA.setPortalType(userType);
-                    login2FA.setLastTwoFACode(generateSecret());
-                    
-                    // Handle user type specific operations
                     switch (userType) {
                         case "patient":
                             Patient newPatient = new Patient();
@@ -401,7 +400,6 @@ public class Main {
                             // Set login details
                             login2FA.setUserIdentifier(identifier);
                             login2FA.setLoginUsername(identifier);
-                            login2FA.setLoginPassword(jsonBody.get("password").getAsString());
                             break;
                             
                         case "professional":
@@ -421,6 +419,9 @@ public class Main {
                             // Insert professional
                             HealthcareProfessionalDAO professionalDAO = new HealthcareProfessionalDAO(conn);
                             professionalDAO.insertHealthcareProfessional(newProfessional);
+
+                            login2FA.setUserIdentifier(identifier);
+                            login2FA.setLoginUsername(identifier);
                             break;
 
                         case "institute":
@@ -438,28 +439,30 @@ public class Main {
                             // Insert institute
                             HealthcareInstituteDAO instituteDAO = new HealthcareInstituteDAO(conn);
                             instituteDAO.insertHealthcareInstitute(newInstitute);
-                            break;
 
-                        default:
-                            throw new IllegalArgumentException("Invalid user type: " + userType);
+                            login2FA.setUserIdentifier(identifier);
+                            login2FA.setLoginUsername(identifier);
+                            break;
+                    }
+
+                    // Now handle Login2FA signup
+                    if (identifier != null) {
+                        Login2FADAO login2FADao = new Login2FADAO(conn);
+                        boolean loginCreated = login2FADao.signup(login2FA, userType);
+
+                        if (loginCreated) {
+                            conn.commit();
+                            return gson.toJson(new ApiResponse("success", 
+                                userType + " registration successful. Your identifier is: " + identifier,
+                                identifier));
+                        }
                     }
                     
-                    // Now insert Login2FA entry using the same connection
-                    Login2FADAO login2FADao = new Login2FADAO(conn);
-                    boolean signupSuccess = login2FADao.signup(login2FA, userType);
-                    
-                    if (signupSuccess) {
-                        conn.commit();  // Commit only if everything succeeded
-                        return gson.toJson(new ApiResponse("success", 
-                            userType + " registration successful. Your identifier is: " + identifier,
-                            identifier));
-                    } else {
-                        throw new Exception("Failed to complete registration");
-                    }
+                    throw new Exception("Failed to complete registration");
                     
                 } catch (Exception e) {
                     if (conn != null) {
-                        conn.rollback();  // Rollback on any error
+                        conn.rollback();
                     }
                     throw e;
                 }
@@ -472,7 +475,7 @@ public class Main {
             } finally {
                 if (conn != null) {
                     try {
-                        conn.setAutoCommit(true);  // Reset auto-commit
+                        conn.setAutoCommit(true);
                         conn.close();
                     } catch (SQLException e) {
                         System.err.println("Error closing connection: " + e.getMessage());

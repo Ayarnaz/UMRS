@@ -34,13 +34,6 @@ const roles = [
     { value: 'surgeon', label: 'Surgeon' }
 ];
 
-const healthcareInstitutes = [
-    { value: 'HI001', label: 'General Hospital Colombo' },
-    { value: 'HI002', label: 'National Hospital of Sri Lanka' },
-    { value: 'HI003', label: 'Lady Ridgeway Hospital' },
-    { value: 'HI004', label: 'Colombo South Teaching Hospital' }
-];
-
 export default function HealthcareProfessionalRegistrationModal({ isOpen, onClose }) {
     const {
         values,
@@ -137,7 +130,7 @@ export default function HealthcareProfessionalRegistrationModal({ isOpen, onClos
                         </div>
 
                         <div className="space-y-2">
-                            {renderField('healthInstituteNumber', 'Healthcare Institute', 'select', healthcareInstitutes)}
+                            {renderField('healthInstituteNumber', 'Healthcare Institute Number')}
                         </div>
 
                         {renderField('email', 'Email', 'email')}

@@ -1526,12 +1526,16 @@ public class Main {
 
         get("/api/professional/record-requests", (req, res) -> {
             res.type("application/json");
-            String id = req.queryParams("slmcNo");
-            String type = "PROFESSIONAL";
+            String userIdentifier = req.queryParams("userIdentifier");
             
+            if (userIdentifier == null || userIdentifier.isEmpty()) {
+                res.status(400);
+                return gson.toJson(new ApiResponse("error", "User identifier is required"));
+            }
+
             try {
-                List<RecordRequest> requests = recordSharingDAO.getRecordRequests(id, type);
-                return gson.toJson(requests);
+                List<RecordRequest> requests = recordSharingDAO.getRecordRequests(userIdentifier, "PROFESSIONAL");
+                return gson.toJson(requests); // Return the list directly
             } catch (Exception e) {
                 e.printStackTrace();
                 res.status(500);
@@ -1556,34 +1560,65 @@ public class Main {
 
         post("/api/professional/request-record", (req, res) -> {
             res.type("application/json");
+            System.out.println("Received request body: " + req.body());
+            
             try {
-                JsonObject jsonRequest = JsonParser.parseString(req.body()).getAsJsonObject();
+                JsonObject requestBody = JsonParser.parseString(req.body()).getAsJsonObject();
                 
-                RecordRequest request = new RecordRequest();
-                request.setRequesterSlmc(jsonRequest.get("requestingSlmcNo").getAsString());
-                request.setRequesterType("PROFESSIONAL");
-                request.setReceiverType(jsonRequest.has("receiverType") ? 
-                    jsonRequest.get("receiverType").getAsString() : "PROFESSIONAL");
-                request.setPatientPHN(jsonRequest.get("patientPHN").getAsString());
-                request.setRecordType(jsonRequest.get("recordType").getAsString());
-                request.setPurpose(jsonRequest.get("purpose").getAsString());
+                // Validate required fields
+                String[] requiredFields = {
+                    "requestingSlmcNo", "providerName", "patientPHN", 
+                    "recordType", "purpose", "receiverType"
+                };
                 
-                if (request.getReceiverType().equals("PROFESSIONAL")) {
-                    request.setReceiverSlmc(jsonRequest.get("providerName").getAsString());
-                } else {
-                    request.setReceiverInstituteId(jsonRequest.get("providerName").getAsString());
+                // Check for missing fields
+                for (String field : requiredFields) {
+                    if (!requestBody.has(field) || requestBody.get(field) == null) {
+                        res.status(400);
+                        return gson.toJson(new ApiResponse("error", "Missing required field: " + field));
+                    }
                 }
-
+                
+                // Create a new record request with safe getters
+                RecordRequest request = new RecordRequest();
+                
+                // Set the requester details
+                request.setRequesterType("PROFESSIONAL");
+                request.setRequesterSlmc(getStringFromJson(requestBody, "requestingSlmcNo"));
+                
+                // Set the receiver details based on receiver type
+                String receiverType = getStringFromJson(requestBody, "receiverType");
+                request.setReceiverType(receiverType);
+                
+                String providerName = getStringFromJson(requestBody, "providerName");
+                if ("PROFESSIONAL".equals(receiverType)) {
+                    request.setReceiverSlmc(providerName);
+                } else {
+                    request.setReceiverInstituteId(providerName);
+                }
+                
+                // Set other request details
+                request.setPatientPHN(getStringFromJson(requestBody, "patientPHN"));
+                request.setRecordType(getStringFromJson(requestBody, "recordType"));
+                request.setPurpose(getStringFromJson(requestBody, "purpose"));
+                request.setStatus("pending");
+                
+                System.out.println("Created request object: " + request.toString());
+                
+                // Save the request using RecordSharingDAO
+                RecordSharingDAO recordSharingDAO = new RecordSharingDAO(dataSource);
                 boolean success = recordSharingDAO.createRecordRequest(request);
                 
                 if (success) {
-                    return gson.toJson(new ApiResponse("success", "Record request created successfully"));
+                    return gson.toJson(new ApiResponse("success", "Record request submitted successfully"));
                 } else {
                     res.status(500);
-                    return gson.toJson(new ApiResponse("error", "Failed to create record request"));
+                    return gson.toJson(new ApiResponse("error", "Failed to submit record request"));
                 }
+                
             } catch (Exception e) {
                 e.printStackTrace();
+                System.err.println("Error processing request: " + e.getMessage());
                 res.status(500);
                 return gson.toJson(new ApiResponse("error", "Server error: " + e.getMessage()));
             }

@@ -98,6 +98,8 @@ CREATE TABLE IF NOT EXISTS Login_2FA (
 
 /*DELETE FROM Login_2FA;*/
 
+/*DROP TABLE IF EXISTS Activity;*/
+
 CREATE TABLE IF NOT EXISTS Activity (
     Activity_ID INTEGER PRIMARY KEY AUTOINCREMENT,
     Personal_Health_No TEXT NOT NULL,
@@ -106,11 +108,26 @@ CREATE TABLE IF NOT EXISTS Activity (
     FOREIGN KEY (Personal_Health_No) REFERENCES Patient(Personal_Health_No)
 );
 
+-- Update the Activity table
+/*ALTER TABLE Activity ADD COLUMN Entity_Type TEXT DEFAULT 'patient';
+ALTER TABLE Activity ADD COLUMN Entity_ID TEXT;
+ALTER TABLE Activity ADD COLUMN Type TEXT DEFAULT 'general';
+ALTER TABLE Activity ADD COLUMN Status TEXT DEFAULT 'completed';
+ALTER TABLE Activity ADD COLUMN User_ID TEXT;
+
+-- Update existing records to use new columns
+UPDATE Activity SET 
+    Entity_Type = 'patient',
+    Entity_ID = Personal_Health_No,
+    Type = 'general',
+    Status = 'completed';*/
+
+
 /*DROP TABLE IF EXISTS Record_Access_Requests;*/
 
 CREATE TABLE IF NOT EXISTS Record_Access_Requests (
     Request_ID INTEGER PRIMARY KEY AUTOINCREMENT,
-    Personal_Health_No TEXT NOT NULL,  -- Changed from PHN
+    Personal_Health_No TEXT NOT NULL,  
     SLMC_No TEXT,
     Institute_No TEXT,
     Purpose TEXT,
@@ -119,7 +136,7 @@ CREATE TABLE IF NOT EXISTS Record_Access_Requests (
     Request_Date DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (Personal_Health_No) REFERENCES Patient(Personal_Health_No),
     FOREIGN KEY (SLMC_No) REFERENCES Healthcare_Professional(SLMC_No),
-    FOREIGN KEY (Institute_No) REFERENCES Healthcare_Institute(Institute_No),
+    FOREIGN KEY (Institute_No) REFERENCES Healthcare_Institute(Health_Institute_Number),
     CHECK ((SLMC_No IS NOT NULL AND Institute_No IS NULL) OR 
            (SLMC_No IS NULL AND Institute_No IS NOT NULL))
 );
@@ -137,6 +154,9 @@ CREATE TABLE IF NOT EXISTS Record_Access_Requests (
 /*ALTER TABLE Medical_Document ADD CONSTRAINT fk_document_patient 
 FOREIGN KEY (Personal_Health_No) REFERENCES PATIENT(Personal_Health_No) ON DELETE CASCADE;*/
 
+/*DROP TABLE IF EXISTS Record_Requests;
+DROP TABLE IF EXISTS Shared_Records;*/
+
 CREATE TABLE IF NOT EXISTS Record_Requests (
     request_id INTEGER PRIMARY KEY AUTOINCREMENT,
     requester_slmc TEXT,
@@ -151,9 +171,9 @@ CREATE TABLE IF NOT EXISTS Record_Requests (
     requester_type TEXT NOT NULL CHECK (requester_type IN ('PROFESSIONAL', 'INSTITUTE')),
     receiver_type TEXT NOT NULL CHECK (receiver_type IN ('PROFESSIONAL', 'INSTITUTE')),
     FOREIGN KEY (requester_slmc) REFERENCES Healthcare_Professional(SLMC_No),
-    FOREIGN KEY (requester_institute_id) REFERENCES Healthcare_Institute(Institute_ID),
+    FOREIGN KEY (requester_institute_id) REFERENCES Healthcare_Institute(Health_Institute_Number),
     FOREIGN KEY (receiver_slmc) REFERENCES Healthcare_Professional(SLMC_No),
-    FOREIGN KEY (receiver_institute_id) REFERENCES Healthcare_Institute(Institute_ID),
+    FOREIGN KEY (receiver_institute_id) REFERENCES Healthcare_Institute(Health_Institute_Number),
     FOREIGN KEY (patient_phn) REFERENCES Patient(Personal_Health_No),
     CHECK ((requester_slmc IS NOT NULL AND requester_institute_id IS NULL) OR 
            (requester_slmc IS NULL AND requester_institute_id IS NOT NULL)),
@@ -176,9 +196,9 @@ CREATE TABLE IF NOT EXISTS Shared_Records (
     sender_type TEXT NOT NULL CHECK (sender_type IN ('PROFESSIONAL', 'INSTITUTE')),
     receiver_type TEXT NOT NULL CHECK (receiver_type IN ('PROFESSIONAL', 'INSTITUTE')),
     FOREIGN KEY (sender_slmc) REFERENCES Healthcare_Professional(SLMC_No),
-    FOREIGN KEY (sender_institute_id) REFERENCES Healthcare_Institute(Institute_ID),
+    FOREIGN KEY (sender_institute_id) REFERENCES Healthcare_Institute(Health_Institute_Number),
     FOREIGN KEY (receiver_slmc) REFERENCES Healthcare_Professional(SLMC_No),
-    FOREIGN KEY (receiver_institute_id) REFERENCES Healthcare_Institute(Institute_ID),
+    FOREIGN KEY (receiver_institute_id) REFERENCES Healthcare_Institute(Health_Institute_Number),
     FOREIGN KEY (patient_phn) REFERENCES Patient(Personal_Health_No),
     CHECK ((sender_slmc IS NOT NULL AND sender_institute_id IS NULL) OR 
            (sender_slmc IS NULL AND sender_institute_id IS NOT NULL)),
@@ -186,9 +206,20 @@ CREATE TABLE IF NOT EXISTS Shared_Records (
            (receiver_slmc IS NULL AND receiver_institute_id IS NOT NULL))
 );
 
+
+CREATE TABLE IF NOT EXISTS Institute_Professional_Association (
+    Health_Institute_Number TEXT NOT NULL,
+    SLMC_No TEXT NOT NULL,
+    Status TEXT DEFAULT 'active',
+    Join_Date TEXT DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (Health_Institute_Number, SLMC_No),
+    FOREIGN KEY (Health_Institute_Number) REFERENCES Healthcare_Institute(Health_Institute_Number),
+    FOREIGN KEY (SLMC_No) REFERENCES Healthcare_Professional(SLMC_No)
+);
+
 -- Indexes for columns that will frequently be queried to improve performance
 CREATE INDEX IF NOT EXISTS idx_patient_email ON PATIENT(Email);
 CREATE INDEX IF NOT EXISTS idx_healthcare_professional_email ON Healthcare_Professional(Email);
 CREATE INDEX IF NOT EXISTS idx_institute_email ON Healthcare_Institute(Email);
 CREATE INDEX IF NOT EXISTS idx_medical_document_phn ON Medical_Document(Personal_Health_No);
-CREATE INDEX IF NOT EXISTS idx_medical_record_phn ON Medical_Record(Personal_Health_No);
+CREATE INDEX IF NOT EXISTS idx_activity_entity ON Activity(Entity_Type, Entity_ID);

@@ -10,6 +10,7 @@ public class RecordAccess {
     private String status;
     private boolean isEmergency;
     private String patientName; // For joining with Patient table
+    private String instituteNo;
 
     // Default constructor
     public RecordAccess() {}
@@ -51,6 +52,9 @@ public class RecordAccess {
     public String getPatientName() { return patientName; }
     public void setPatientName(String patientName) { this.patientName = patientName; }
 
+    public String getInstituteNo() { return instituteNo; }
+    public void setInstituteNo(String instituteNo) { this.instituteNo = instituteNo; }
+
     // Convert to Map for JSON response
     public Map<String, Object> toMap() {
         Map<String, Object> map = new HashMap<>();
@@ -61,6 +65,7 @@ public class RecordAccess {
         map.put("requestDate", requestDate);
         map.put("status", status);
         map.put("isEmergency", isEmergency);
+        map.put("instituteNo", instituteNo);
         return map;
     }
 } 

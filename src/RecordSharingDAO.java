@@ -12,105 +12,106 @@ public class RecordSharingDAO {
         this.dataSource = dataSource;
     }
 
-    public List<RecordSharing> getSharedRecords(String id, String type) {
+    public List<RecordSharing> getSharedRecords(String userIdentifier, String userType) {
+        String sql = userType.equals("PROFESSIONAL") ?
+            """
+            SELECT * FROM Shared_Records 
+            WHERE (sender_slmc = ? OR receiver_slmc = ?) 
+            AND (
+                (sender_slmc = ? AND receiver_slmc IS NOT NULL)
+                OR (receiver_slmc = ? AND sender_slmc IS NOT NULL)
+            )
+            ORDER BY share_date DESC
+            """ :
+            """
+            SELECT * FROM Shared_Records 
+            WHERE (sender_institute_id = ? OR receiver_institute_id = ?) 
+            AND (
+                (sender_institute_id = ? AND receiver_institute_id IS NOT NULL)
+                OR (receiver_institute_id = ? AND sender_institute_id IS NOT NULL)
+            )
+            ORDER BY share_date DESC
+            """;
+        
         List<RecordSharing> records = new ArrayList<>();
-        String sql = "SELECT sr.*, " +
-                    "CASE " +
-                    "  WHEN sr.sender_type = 'PROFESSIONAL' THEN sp.Name " +
-                    "  ELSE si.Name " +
-                    "END as sender_name, " +
-                    "CASE " +
-                    "  WHEN sr.receiver_type = 'PROFESSIONAL' THEN rp.Name " +
-                    "  ELSE ri.Name " +
-                    "END as receiver_name " +
-                    "FROM Shared_Records sr " +
-                    "LEFT JOIN Healthcare_Professional sp ON sr.sender_slmc = sp.SLMC_No " +
-                    "LEFT JOIN Healthcare_Professional rp ON sr.receiver_slmc = rp.SLMC_No " +
-                    "LEFT JOIN Healthcare_Institute si ON sr.sender_institute_id = si.Institute_ID " +
-                    "LEFT JOIN Healthcare_Institute ri ON sr.receiver_institute_id = ri.Institute_ID " +
-                    "WHERE (sr.sender_type = ? AND (sr.sender_slmc = ? OR sr.sender_institute_id = ?)) OR " +
-                    "(sr.receiver_type = ? AND (sr.receiver_slmc = ? OR sr.receiver_institute_id = ?)) " +
-                    "ORDER BY sr.share_date DESC";
-
+        
         try (Connection conn = dataSource.getConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
             
-            pstmt.setString(1, type);
-            pstmt.setString(2, id);
-            pstmt.setString(3, id);
-            pstmt.setString(4, type);
-            pstmt.setString(5, id);
-            pstmt.setString(6, id);
-            ResultSet rs = pstmt.executeQuery();
-
-            while (rs.next()) {
-                RecordSharing record = new RecordSharing();
-                record.setRecordId(rs.getInt("record_id"));
-                record.setSenderSlmc(rs.getString("sender_slmc"));
-                record.setSenderInstituteId(rs.getString("sender_institute_id"));
-                record.setReceiverSlmc(rs.getString("receiver_slmc"));
-                record.setReceiverInstituteId(rs.getString("receiver_institute_id"));
-                record.setPatientPHN(rs.getString("patient_phn"));
-                record.setRecordType(rs.getString("record_type"));
-                record.setSubType(rs.getString("sub_type"));
-                record.setFilePath(rs.getString("file_path"));
-                record.setStatus(rs.getString("status"));
-                record.setShareDate(rs.getTimestamp("share_date"));
-                record.setSenderType(rs.getString("sender_type"));
-                record.setReceiverType(rs.getString("receiver_type"));
-                record.setSenderName(rs.getString("sender_name"));
-                record.setReceiverName(rs.getString("receiver_name"));
-                records.add(record);
+            pstmt.setString(1, userIdentifier);
+            pstmt.setString(2, userIdentifier);
+            pstmt.setString(3, userIdentifier);
+            pstmt.setString(4, userIdentifier);
+            
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    RecordSharing record = new RecordSharing();
+                    record.setRecordId(rs.getInt("record_id"));
+                    record.setSenderSlmc(rs.getString("sender_slmc"));
+                    record.setReceiverSlmc(rs.getString("receiver_slmc"));
+                    record.setPatientPHN(rs.getString("patient_phn"));
+                    record.setRecordType(rs.getString("record_type"));
+                    record.setStatus(rs.getString("status"));
+                    record.setShareDate(rs.getTimestamp("share_date"));
+                    records.add(record);
+                }
             }
         } catch (SQLException e) {
             e.printStackTrace();
         }
+        
         return records;
     }
 
-    public List<RecordRequest> getRecordRequests(String id, String type) {
+    public List<RecordRequest> getRecordRequests(String userIdentifier, String userType) {
+        String sql = userType.equals("PROFESSIONAL") ?
+            """
+            SELECT * FROM Record_Requests 
+            WHERE (requester_slmc = ? OR receiver_slmc = ?) 
+            AND (
+                (requester_slmc = ? AND receiver_slmc IS NOT NULL)
+                OR (receiver_slmc = ? AND requester_slmc IS NOT NULL)
+            )
+            ORDER BY request_date DESC
+            """ :
+            """
+            SELECT * FROM Record_Requests 
+            WHERE (requester_institute_id = ? OR receiver_institute_id = ?) 
+            AND (
+                (requester_institute_id = ? AND receiver_institute_id IS NOT NULL)
+                OR (receiver_institute_id = ? AND requester_institute_id IS NOT NULL)
+            )
+            ORDER BY request_date DESC
+            """;
+        
         List<RecordRequest> requests = new ArrayList<>();
-        String sql = "SELECT rr.*, " +
-                    "CASE " +
-                    "  WHEN rr.requester_type = 'PROFESSIONAL' THEN hp.Name " +
-                    "  ELSE hi.Name " +
-                    "END as requester_name " +
-                    "FROM Record_Requests rr " +
-                    "LEFT JOIN Healthcare_Professional hp ON rr.requester_slmc = hp.SLMC_No " +
-                    "LEFT JOIN Healthcare_Institute hi ON rr.requester_institute_id = hi.Institute_ID " +
-                    "WHERE rr.receiver_type = ? AND " +
-                    "(rr.receiver_slmc = ? OR rr.receiver_institute_id = ?) " +
-                    "AND rr.status = 'pending' " +
-                    "ORDER BY rr.request_date DESC";
-
+        
         try (Connection conn = dataSource.getConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
             
-            pstmt.setString(1, type);
-            pstmt.setString(2, id);
-            pstmt.setString(3, id);
-            ResultSet rs = pstmt.executeQuery();
-
-            while (rs.next()) {
-                RecordRequest request = new RecordRequest();
-                request.setRequestId(rs.getInt("request_id"));
-                request.setRequesterSlmc(rs.getString("requester_slmc"));
-                request.setRequesterInstituteId(rs.getString("requester_institute_id"));
-                request.setReceiverSlmc(rs.getString("receiver_slmc"));
-                request.setReceiverInstituteId(rs.getString("receiver_institute_id"));
-                request.setPatientPHN(rs.getString("patient_phn"));
-                request.setRecordType(rs.getString("record_type"));
-                request.setPurpose(rs.getString("purpose"));
-                request.setStatus(rs.getString("status"));
-                request.setRequestDate(rs.getTimestamp("request_date"));
-                request.setRequesterType(rs.getString("requester_type"));
-                request.setReceiverType(rs.getString("receiver_type"));
-                request.setRequesterName(rs.getString("requester_name"));
-                requests.add(request);
+            pstmt.setString(1, userIdentifier);
+            pstmt.setString(2, userIdentifier);
+            pstmt.setString(3, userIdentifier);
+            pstmt.setString(4, userIdentifier);
+            
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    RecordRequest request = new RecordRequest();
+                    request.setRequestId(rs.getInt("request_id"));
+                    request.setRequesterSlmc(rs.getString("requester_slmc"));
+                    request.setReceiverSlmc(rs.getString("receiver_slmc"));
+                    request.setPatientPHN(rs.getString("patient_phn"));
+                    request.setRecordType(rs.getString("record_type"));
+                    request.setPurpose(rs.getString("purpose"));
+                    request.setStatus(rs.getString("status"));
+                    request.setRequestDate(rs.getTimestamp("request_date"));
+                    requests.add(request);
+                }
             }
         } catch (SQLException e) {
             e.printStackTrace();
         }
+        
         return requests;
     }
 

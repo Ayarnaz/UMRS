@@ -2004,7 +2004,7 @@ public class Main {
                     return gson.toJson(new ApiResponse("error", "Institute number is required"));
                 }
 
-                InstituteStaffDAO staffDAO = new InstituteStaffDAO(connHolder[0]);
+                InstituteStaffDAO staffDAO = new InstituteStaffDAO();
                 List<Map<String, Object>> professionals = staffDAO.getInstituteProfessionals(instituteNumber);
                 return gson.toJson(professionals);
             } catch (Exception e) {
@@ -2022,7 +2022,7 @@ public class Main {
                 String instituteNumber = jsonRequest.get("instituteNumber").getAsString();
                 String slmcNo = jsonRequest.get("slmcNo").getAsString();
 
-                InstituteStaffDAO staffDAO = new InstituteStaffDAO(connHolder[0]);
+                InstituteStaffDAO staffDAO = new InstituteStaffDAO();
                 boolean success = staffDAO.addProfessional(instituteNumber, slmcNo);
 
                 if (success) {
@@ -2047,7 +2047,7 @@ public class Main {
                 String instituteNumber = jsonRequest.get("instituteNumber").getAsString();
                 String status = jsonRequest.get("status").getAsString();
 
-                InstituteStaffDAO staffDAO = new InstituteStaffDAO(connHolder[0]);
+                InstituteStaffDAO staffDAO = new InstituteStaffDAO();
                 boolean success = staffDAO.updateProfessionalStatus(instituteNumber, slmcNo, status);
 
                 if (success) {
@@ -2096,40 +2096,48 @@ public class Main {
         });
 
         // Update the institute medical records endpoint
-        get("/api/institute/medical-records", (req, res) -> {
+        get("/api/institute/medical-records/:phn", (req, res) -> {
             res.type("application/json");
-            String instituteId = req.queryParams("instituteId");
-            
+            String phn = req.params(":phn");
+            System.out.println("Institute endpoint - Fetching records for PHN: " + phn);
+
             try {
-                if (instituteId == null || instituteId.isEmpty()) {
-                    res.status(400);
-                    return gson.toJson(new ApiResponse("error", "Institute ID is required"));
+                // Use the same query as professional endpoint
+                String sql = """
+                    SELECT r.*, p.Name as Patient_Name 
+                    FROM Medical_Record r 
+                    LEFT JOIN Patient p ON r.Personal_Health_No = p.Personal_Health_No 
+                    WHERE r.Personal_Health_No = ?
+                    ORDER BY r.Date DESC
+                """;
+
+                try (Connection conn = dataSource.getConnection();
+                     PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                    
+                    pstmt.setString(1, phn);
+                    ResultSet rs = pstmt.executeQuery();
+                    
+                    List<Map<String, Object>> records = new ArrayList<>();
+                    while (rs.next()) {
+                        Map<String, Object> record = new HashMap<>();
+                        record.put("recordId", rs.getInt("Record_ID"));
+                        record.put("dateOfVisit", rs.getString("Date"));
+                        record.put("type", rs.getString("Type"));
+                        record.put("diagnosis", rs.getString("Diagnosis"));
+                        record.put("medications", rs.getString("Medications")); // Changed from Prescription
+                        record.put("notes", rs.getString("Notes"));
+                        record.put("patientName", rs.getString("Patient_Name"));
+                        records.add(record);
+                    }
+                    
+                    System.out.println("Retrieved " + records.size() + " records for PHN: " + phn);
+                    return gson.toJson(records);
                 }
-
-                MedicalRecordDAO recordDAO = new MedicalRecordDAO(connHolder[0]);
-                List<MedicalRecord> records = recordDAO.getRecordsByInstitute(instituteId);
-                
-                // Transform records to match frontend expectations
-                List<Map<String, Object>> responseRecords = records.stream()
-                    .map(record -> {
-                        Map<String, Object> map = new HashMap<>();
-                        map.put("recordId", record.getRecordId());
-                        map.put("patientPHN", record.getPersonalHealthNo());
-                        map.put("type", record.getType());
-                        map.put("summary", record.getSummary());
-                        map.put("dateOfVisit", record.getDateOfVisit().toString());
-                        map.put("diagnosis", record.getDiagnosis());
-                        map.put("treatment", record.getTreatment());
-                        map.put("notes", record.getNotes());
-                        return map;
-                    })
-                    .collect(java.util.stream.Collectors.toList());
-
-                return gson.toJson(responseRecords);
             } catch (Exception e) {
+                System.err.println("Error fetching medical records: " + e.getMessage());
                 e.printStackTrace();
                 res.status(500);
-                return gson.toJson(new ApiResponse("error", "Failed to fetch medical records: " + e.getMessage()));
+                return gson.toJson(new ApiResponse("error", "Failed to fetch medical records"));
             }
         });
 
@@ -2146,62 +2154,17 @@ public class Main {
             res.type("application/json");
             String instituteId = req.queryParams("instituteId");
             System.out.println("Received records-data request for Institute: " + instituteId);
-            
-            try (Connection conn = getConnection()) {
-                Map<String, List<Map<String, Object>>> result = new HashMap<>();
-                
-                // Get accessed records (just like professional's implementation)
-                String accessedRecordsSQL = """
-                    SELECT DISTINCT 
-                        mr.Record_ID as id,
-                        mr.Personal_Health_No as personalHealthNo,
-                        p.Name as patientName,
-                        COALESCE(rar.Purpose, 'Medical Record') as purpose,
-                        COALESCE(rar.Status, 'approved') as status,
-                        COALESCE(rar.Request_Date, mr.Date_of_Visit) as requestDate
-                    FROM Record_Access_Requests rar
-                    JOIN Patient p ON rar.Personal_Health_No = p.Personal_Health_No
-                    LEFT JOIN Medical_Record mr ON rar.Personal_Health_No = mr.Personal_Health_No
-                    WHERE rar.Institute_No = ?
-                    ORDER BY rar.Request_Date DESC
-                """;
 
-                List<Map<String, Object>> accessedRecords = new ArrayList<>();
-                try (PreparedStatement pstmt = conn.prepareStatement(accessedRecordsSQL)) {
-                    pstmt.setString(1, instituteId);
-                    ResultSet rs = pstmt.executeQuery();
-                    
-                    while (rs.next()) {
-                        Map<String, Object> record = new HashMap<>();
-                        record.put("id", rs.getInt("id"));
-                        record.put("personalHealthNo", rs.getString("personalHealthNo"));
-                        record.put("patientName", rs.getString("patientName"));
-                        record.put("purpose", rs.getString("purpose"));
-                        record.put("status", rs.getString("status"));
-                        
-                        // Format date to match professional's implementation
-                        Timestamp requestDate = rs.getTimestamp("requestDate");
-                        if (requestDate != null) {
-                            record.put("requestDate", new SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
-                                .format(requestDate));
-                        }
-                        
-                        accessedRecords.add(record);
-                    }
-                }
-
-                // Debug logging
-                System.out.println("Fetched " + accessedRecords.size() + " accessed records for institute " + instituteId);
-                
-                result.put("accessedRecords", accessedRecords);
-                result.put("medicalRecords", new ArrayList<>()); // Empty list as in professional's implementation
-                
-                return gson.toJson(result);
-
+            try {
+                RecordAccessDAO accessDAO = new RecordAccessDAO(dataSource);
+                Map<String, List<Map<String, Object>>> response = accessDAO.getInstituteRecordsData(instituteId);
+                System.out.println("Fetched " + response.get("accessedRecords").size() + " accessed records for institute " + instituteId);
+                return gson.toJson(response);
             } catch (Exception e) {
+                System.err.println("Error fetching institute records: " + e.getMessage());
                 e.printStackTrace();
                 res.status(500);
-                return gson.toJson(new ApiResponse("error", "Failed to fetch records: " + e.getMessage()));
+                return gson.toJson(new ApiResponse("error", "Failed to fetch records"));
             }
         });
 
@@ -2242,40 +2205,31 @@ public class Main {
         // Add request access endpoint for institutes
         post("/api/institute/request-access", (req, res) -> {
             res.type("application/json");
-            String body = req.body();
-            JsonObject requestData = JsonParser.parseString(body).getAsJsonObject();
-
-            String personalHealthNo = requestData.get("personalHealthNo").getAsString();
-            String instituteId = requestData.get("instituteId").getAsString();
-            String purpose = requestData.get("purpose").getAsString();
-            boolean isEmergency = requestData.get("isEmergency").getAsBoolean();
-
-            try (Connection conn = getConnection()) {
-                String sql = "INSERT INTO Record_Access_Requests " +
-                            "(Personal_Health_No, Institute_No, Purpose, Is_Emergency, Status) " +
-                            "VALUES (?, ?, ?, ?, ?)";
+            try {
+                String requestBody = req.body();
+                System.out.println("Request body: " + requestBody);
                 
-                try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-                    pstmt.setString(1, personalHealthNo);
-                    pstmt.setString(2, instituteId);
-                    pstmt.setString(3, purpose);
-                    pstmt.setBoolean(4, isEmergency);
-                    pstmt.setString(5, isEmergency ? "approved" : "pending");
-                    
-                    int affectedRows = pstmt.executeUpdate();
-                    
-                    if (affectedRows > 0) {
-                        return gson.toJson(new ApiResponse("success", 
-                            isEmergency ? "Emergency access granted" : "Access request submitted successfully"));
-                    } else {
-                        res.status(500);
-                        return gson.toJson(new ApiResponse("error", "Failed to submit request"));
-                    }
+                JsonObject jsonRequest = JsonParser.parseString(requestBody).getAsJsonObject();
+                System.out.println("Parsed JSON request: " + jsonRequest);
+                
+                RecordAccess recordAccess = new RecordAccess();
+                recordAccess.setPhn(jsonRequest.get("personalHealthNo").getAsString());
+                recordAccess.setInstituteNo(jsonRequest.get("instituteNo").getAsString());
+                recordAccess.setPurpose(jsonRequest.get("purpose").getAsString());
+                recordAccess.setEmergency(jsonRequest.get("isEmergency").getAsBoolean());
+                
+                boolean success = recordAccessDAO.createAccessRequest(recordAccess);
+                
+                if (success) {
+                    return gson.toJson(new ApiResponse("success", "Access request created successfully"));
+                } else {
+                    res.status(500);
+                    return gson.toJson(new ApiResponse("error", "Failed to create access request"));
                 }
+                
             } catch (Exception e) {
-                e.printStackTrace();
                 res.status(500);
-                return gson.toJson(new ApiResponse("error", "Database error: " + e.getMessage()));
+                return gson.toJson(new ApiResponse("error", "Server error: " + e.getMessage()));
             }
         });
 
@@ -2767,31 +2721,25 @@ public class Main {
             e.printStackTrace();
         }
 
+        // Update the analytics endpoint
         get("/api/professional/analytics", (req, res) -> {
             res.type("application/json");
             String slmcNo = req.queryParams("slmcNo");
             String timeRange = req.queryParams("range");
             int months = timeRange != null ? Integer.parseInt(timeRange.replace("m", "")) : 12;
             
-            if (slmcNo == null || slmcNo.trim().isEmpty()) {
-                res.status(400);
-                return gson.toJson(new ApiResponse("error", "SLMC number is required"));
-            }
-
-            try (Connection conn = getConnection()) {
-                HealthcareProfessionalDAO professionalDAO = new HealthcareProfessionalDAO(conn);
-                Map<String, Object> analytics = professionalDAO.getAnalytics(slmcNo, months);
-                
+            try {
+                AnalyticsDAO analyticsDAO = new AnalyticsDAO();
+                Map<String, Object> analytics = analyticsDAO.getAnalytics(slmcNo, months);
                 return gson.toJson(analytics);
             } catch (Exception e) {
-                System.err.println("Error generating analytics: " + e.getMessage());
                 e.printStackTrace();
                 res.status(500);
-                return gson.toJson(new ApiResponse("error", "Failed to generate analytics"));
+                return gson.toJson(new ApiResponse("error", "Failed to generate analytics: " + e.getMessage()));
             }
         });
 
-        // Change the endpoint path to be more specific
+        // the endpoint path changed to be more specific
         get("/api/patient/dashboard/summary/:phn", (req, res) -> {
             String personalHealthNo = req.params(":phn");
             Map<String, Object> dashboardData = new HashMap<>();
@@ -2843,6 +2791,23 @@ public class Main {
                 e.printStackTrace();
                 res.status(500);
                 return gson.toJson(new ApiResponse("error", "Database error: " + e.getMessage()));
+            }
+        });
+
+        // endpoint for institute analytics
+        get("/api/institute/analytics", (req, res) -> {
+            res.type("application/json");
+            String instituteId = req.queryParams("instituteId");
+            int days = Integer.parseInt(req.queryParams("days"));
+            
+            try {
+                AnalyticsDAO analyticsDAO = new AnalyticsDAO();
+                Map<String, Object> analytics = analyticsDAO.getInstituteAnalytics(instituteId, days);
+                return gson.toJson(analytics);
+            } catch (Exception e) {
+                e.printStackTrace();
+                res.status(500);
+                return gson.toJson(new ApiResponse("error", "Failed to fetch institute analytics: " + e.getMessage()));
             }
         });
     }
@@ -2986,7 +2951,7 @@ public class Main {
         return 0;
     }
 
-    // Add this method to the Main class
+    
     private static String generateSecret() {
         // Generate a random string of 6 digits
         Random random = new Random();

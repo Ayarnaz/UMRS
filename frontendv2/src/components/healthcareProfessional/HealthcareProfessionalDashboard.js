@@ -7,6 +7,7 @@ import QuickAccessCard from './QuickAccessCard';
 import { getHealthcareProfessionalDashboard } from '../../services/healthcareProfessionalService';
 import { useNotification } from '../../context/NotificationContext';
 import ActivityTable from './ActivityTable';
+import api from '../../services/api';
 
 function HealthcareProfessionalDashboard() {
     const navigate = useNavigate();
@@ -16,22 +17,42 @@ function HealthcareProfessionalDashboard() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [status, setStatus] = useState('active');
+    const [pendingRequests, setPendingRequests] = useState(0);
 
     useEffect(() => {
         const fetchDashboardData = async () => {
             if (!user?.userIdentifier) {
+                console.log('No user identifier found:', user);
                 setLoading(false);
                 return;
             }
 
             try {
-                const data = await getHealthcareProfessionalDashboard(user.userIdentifier);
-                setDashboardData(data);
+                const [dashboardResponse, requestsResponse] = await Promise.all([
+                    getHealthcareProfessionalDashboard(user.userIdentifier),
+                    api.get(`/api/professional/record-requests?userIdentifier=${user.userIdentifier}`)
+                ]);
+
+                console.log('Dashboard Response:', dashboardResponse);
+                console.log('Requests Response:', requestsResponse.data);
+                console.log('Current User ID:', user.userIdentifier);
+
+                const pendingCount = requestsResponse.data.filter(request => {
+                    const isPending = request.status === 'pending';
+                    const isProvider = request.receiverSlmc === user.userIdentifier;
+                    console.log('Request:', request, 'isPending:', isPending, 'isProvider:', isProvider);
+                    return isPending && isProvider;
+                }).length;
+
+                console.log('Pending Requests Count:', pendingCount);
+                
+                setDashboardData(dashboardResponse);
+                setPendingRequests(pendingCount);
                 setError(null);
             } catch (err) {
+                console.error('Full error details:', err);
                 setError('Failed to load dashboard data');
                 showNotification('error', 'Failed to load dashboard data');
-                console.error('Dashboard error:', err);
             } finally {
                 setLoading(false);
             }
@@ -116,8 +137,10 @@ function HealthcareProfessionalDashboard() {
                         <QuickAccessCard 
                             icon={ClipboardList}
                             title="Report Requests"
-                            value={dashboardData?.stats?.reportRequests || 0}
-                            onClick={() => navigate('/professional/report-requests')}
+                            value={pendingRequests}
+                            onClick={() => navigate('/professional/share-records')}
+                            showNotification={true}
+                            notificationCount={pendingRequests}
                         />
                     </div>
 
